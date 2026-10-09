@@ -27,8 +27,8 @@ Verified locally on 2026-10-08:
 - [x] Create `packages/testing` for deterministic fixtures, simulations, and golden replays.
 - [x] Create `apps/server` as the Cloudflare Worker entry point.
 - [x] Add formatting and linting with repository-wide scripts.
-- [ ] Add CI that installs from the frozen Bun lockfile, typechecks, lints, and tests.
-- [ ] Document local environment variables in an example file without committing secrets.
+- [x] Add CI that installs from the frozen Bun lockfile, typechecks, lints, and tests.
+- [x] Document local environment variables in an example file without committing secrets.
 
 ### Foundation exit check
 
@@ -42,25 +42,25 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 ## 2. Engine Contracts and Invariants
 
-- [ ] Move all public engine input/output types into stable, versioned contracts.
-- [ ] Replace generic thrown errors at the engine boundary with typed rejection results.
-- [ ] Define Snapshot and Event schema versions independently from package versions.
-- [ ] Validate duplicate entity IDs, duplicate occupancy, invalid stats, and invalid starting positions.
-- [ ] Ensure rejected Actions never mutate state, consume RNG, or append Events.
-- [ ] Ensure Observations never mutate state, advance turns, or consume RNG.
-- [ ] Define a canonical serialization format used for checksums and golden replay fixtures.
-- [ ] Record resolved RNG results in Events so replay does not reroll them.
-- [ ] Add an API that replays recorded Events, not only the original requested Actions.
-- [ ] Add ruleset and generator version identifiers to Run definitions and Snapshots.
+- [x] Move all public engine input/output types into stable, versioned contracts.
+- [x] Replace generic thrown errors at the engine boundary with typed rejection results.
+- [x] Define Snapshot and Event schema versions independently from package versions.
+- [x] Validate duplicate entity IDs, duplicate occupancy, invalid stats, and invalid starting positions.
+- [x] Ensure rejected Actions never mutate state, consume RNG, or append Events.
+- [x] Ensure Observations never mutate state, advance turns, or consume RNG.
+- [x] Define a canonical serialization format used for checksums and golden replay fixtures.
+- [x] Record resolved RNG results in Events so replay does not reroll them.
+- [x] Add an API that replays recorded Events, not only the original requested Actions.
+- [x] Add ruleset and generator version identifiers to Run definitions and Snapshots.
 
 ### Engine invariant tests
 
-- [ ] Same seed and accepted Action sequence produces byte-identical Events and final checksum.
-- [ ] Replaying stored Events reconstructs the exact Snapshot.
-- [ ] Reading an Observation any number of times does not change a later outcome.
-- [ ] Invalid Actions leave the Snapshot byte-identical.
-- [ ] Entity ordering does not accidentally change checksums or RNG streams.
-- [ ] Property tests never produce negative AP, out-of-bounds entities, or duplicate occupancy.
+- [x] Same seed and accepted Action sequence produces byte-identical Events and final checksum.
+- [x] Replaying stored Events reconstructs the exact Snapshot.
+- [x] Reading an Observation any number of times does not change a later outcome.
+- [x] Invalid Actions leave the Snapshot byte-identical.
+- [x] Entity ordering does not accidentally change checksums or RNG streams.
+- [x] Property tests never produce negative AP, out-of-bounds entities, or duplicate occupancy.
 
 ## 3. Grid, Vision, and Exploration
 

@@ -3,51 +3,66 @@ import type {
   Action,
   ActionRejectionReason,
   ActionResult,
+  CreateRunResult,
   Direction,
   EngineEvent,
   Observation,
   Position,
+  RecordedEventReplayRejection,
   RejectedActionResult,
+  RejectedCreateRunResult,
+  ReplayEventsResult,
   ReplayResult,
   RunDefinition,
+  RunDefinitionRejectionReason,
   Snapshot,
+} from "@agentfall/contracts";
+import {
+  canonicalStringify,
+  ENGINE_EVENT_SCHEMA_VERSION,
+  SNAPSHOT_SCHEMA_VERSION,
 } from "@agentfall/contracts";
 
 export type {
   AcceptedActionResult,
+  AcceptedCreateRunResult,
   Action,
   ActionRejectionReason,
   ActionResult,
+  CreateRunResult,
   Direction,
   EngineEvent,
   Observation,
   Position,
+  RecordedEventReplayRejection,
   RejectedActionResult,
+  RejectedCreateRunResult,
+  ReplayEventsResult,
   ReplayResult,
   RunDefinition,
+  RunDefinitionRejectionReason,
   Snapshot,
 } from "@agentfall/contracts";
 
-export function createRun(definition: RunDefinition): Snapshot {
-  if (definition.board.width < 1 || definition.board.height < 1) {
-    throw new Error("Board dimensions must be positive.");
-  }
+export function createRun(definition: RunDefinition): CreateRunResult {
+  const rejection = validateRunDefinition(definition);
+  if (rejection) return rejection;
 
   const snapshot: Omit<Snapshot, "checksum"> = {
-    version: 1,
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     seed: definition.seed,
     runId: definition.runId,
+    rulesetVersion: definition.rulesetVersion,
+    generatorVersion: definition.generatorVersion,
     board: clone(definition.board),
     turn: 1,
     actionPoints: 4,
     character: clone(definition.character),
-    enemies: clone(definition.enemies),
+    enemies: clone(definition.enemies).sort(compareEnemies),
     events: [],
   };
 
-  assertInBounds(snapshot.character.position, snapshot.board);
-  for (const enemy of snapshot.enemies) assertInBounds(enemy.position, snapshot.board);
-  return withChecksum(snapshot);
+  return { accepted: true, snapshot: withChecksum(snapshot) };
 }
 
 export function act(snapshot: Snapshot, action: Action): ActionResult {
@@ -88,13 +103,29 @@ export function observe(snapshot: Snapshot): Observation {
 }
 
 export function replay(definition: RunDefinition, actions: Action[]): ReplayResult {
-  let snapshot = createRun(definition);
+  const created = createRun(definition);
+  if (!created.accepted) return { accepted: false, rejection: created };
+  let snapshot = created.snapshot;
 
   for (const action of actions) {
     const result = act(snapshot, action);
     if (!result.accepted) {
       return { accepted: false, snapshot, rejection: result };
     }
+    snapshot = result.snapshot;
+  }
+
+  return { accepted: true, snapshot };
+}
+
+export function replayEvents(definition: RunDefinition, events: EngineEvent[]): ReplayEventsResult {
+  const created = createRun(definition);
+  if (!created.accepted) return { accepted: false, rejection: created };
+  let snapshot = created.snapshot;
+
+  for (const [eventIndex, event] of events.entries()) {
+    const result = applyRecordedEvent(snapshot, event, eventIndex);
+    if (!result.accepted) return { accepted: false, snapshot, rejection: result };
     snapshot = result.snapshot;
   }
 
@@ -110,6 +141,7 @@ function move(snapshot: Snapshot, direction: Direction): ActionResult {
   if (!canEnter(snapshot, to)) return reject("blocked-destination");
 
   const event: EngineEvent = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
     type: "move",
     direction,
     from: clone(snapshot.character.position),
@@ -135,6 +167,7 @@ function attack(snapshot: Snapshot, targetId: string): ActionResult {
   const damage =
     roll >= 10 + target.defense ? rollDie(snapshot, eventIndex, `attack:${targetId}:damage`, 6) : 0;
   const event: EngineEvent = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
     type: "attack",
     targetId,
     roll,
@@ -150,11 +183,79 @@ function attack(snapshot: Snapshot, targetId: string): ActionResult {
 }
 
 function endTurn(snapshot: Snapshot): ActionResult {
-  const event: EngineEvent = { type: "end-turn" };
+  const event: EngineEvent = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "end-turn",
+  };
   return applyEvent(snapshot, event, (next) => {
     next.turn += 1;
     next.actionPoints = 4;
   });
+}
+
+function applyRecordedEvent(
+  snapshot: Snapshot,
+  event: EngineEvent,
+  eventIndex: number,
+): { accepted: true; snapshot: Snapshot } | RecordedEventReplayRejection {
+  if (event.schemaVersion !== ENGINE_EVENT_SCHEMA_VERSION) {
+    return rejectRecordedEvent(eventIndex, "unsupported-event-schema-version");
+  }
+
+  switch (event.type) {
+    case "move": {
+      const delta = directionEntries().find((entry) => entry.direction === event.direction)?.delta;
+      if (
+        event.cost !== 1 ||
+        !delta ||
+        snapshot.actionPoints < event.cost ||
+        !samePosition(snapshot.character.position, event.from) ||
+        !samePosition(add(event.from, delta), event.to) ||
+        !canEnter(snapshot, event.to)
+      ) {
+        return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
+      }
+      return {
+        accepted: true,
+        snapshot: applyEvent(snapshot, event, (next) => {
+          next.character.position = clone(event.to);
+          next.actionPoints -= event.cost;
+        }).snapshot,
+      };
+    }
+    case "attack": {
+      const target = snapshot.enemies.find(
+        (enemy) => enemy.id === event.targetId && enemy.health > 0,
+      );
+      if (
+        event.cost !== 2 ||
+        snapshot.actionPoints < event.cost ||
+        !isDieRoll(event.roll, 20) ||
+        !isDieRoll(event.damage, 6, true) ||
+        !target ||
+        !isAdjacent(snapshot.character.position, target.position)
+      ) {
+        return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
+      }
+      return {
+        accepted: true,
+        snapshot: applyEvent(snapshot, event, (next) => {
+          const nextTarget = next.enemies.find((enemy) => enemy.id === event.targetId);
+          if (!nextTarget) throw new Error("Recorded target disappeared during replay.");
+          nextTarget.health = Math.max(0, nextTarget.health - event.damage);
+          next.actionPoints -= event.cost;
+        }).snapshot,
+      };
+    }
+    case "end-turn":
+      return {
+        accepted: true,
+        snapshot: applyEvent(snapshot, event, (next) => {
+          next.turn += 1;
+          next.actionPoints = 4;
+        }).snapshot,
+      };
+  }
 }
 
 function applyEvent(
@@ -164,14 +265,14 @@ function applyEvent(
 ): AcceptedActionResult {
   const next = clone(snapshot);
   update(next);
-  next.events.push(event);
+  next.events.push(clone(event));
   return { accepted: true, snapshot: withChecksum(next), event };
 }
 
 function withChecksum(snapshot: Omit<Snapshot, "checksum">): Snapshot {
   return {
     ...snapshot,
-    checksum: hash(stableStringify(snapshot)).toString(16).padStart(8, "0"),
+    checksum: hash(canonicalStringify(snapshot)).toString(16).padStart(8, "0"),
   };
 }
 
@@ -197,14 +298,77 @@ function reject(reason: ActionRejectionReason): RejectedActionResult {
   return { accepted: false, reason };
 }
 
-function assertInBounds(position: Position, board: Snapshot["board"]): void {
-  if (!isInBounds(position, board)) throw new Error("Position is outside the board.");
+function rejectRecordedEvent(
+  eventIndex: number,
+  reason: RecordedEventReplayRejection["reason"],
+): RecordedEventReplayRejection {
+  return { accepted: false, eventIndex, reason };
+}
+
+function validateRunDefinition(definition: RunDefinition): RejectedCreateRunResult | undefined {
+  if (!isPositiveInteger(definition.board.width) || !isPositiveInteger(definition.board.height)) {
+    return rejectRunDefinition("invalid-board-dimensions");
+  }
+  if (!isPositiveInteger(definition.character.health)) {
+    return rejectRunDefinition("invalid-character-stats");
+  }
+  if (!isNonEmptyString(definition.rulesetVersion)) {
+    return rejectRunDefinition("invalid-ruleset-version");
+  }
+  if (!isNonEmptyString(definition.generatorVersion)) {
+    return rejectRunDefinition("invalid-generator-version");
+  }
+  if (!isInBounds(definition.character.position, definition.board)) {
+    return rejectRunDefinition("invalid-starting-position");
+  }
+
+  const entityIds = new Set<string>();
+  const occupiedPositions = new Set([positionKey(definition.character.position)]);
+  for (const enemy of definition.enemies) {
+    if (!isPositiveInteger(enemy.health) || !isNonNegativeInteger(enemy.defense)) {
+      return rejectRunDefinition("invalid-enemy-stats");
+    }
+    if (entityIds.has(enemy.id)) return rejectRunDefinition("duplicate-entity-id");
+    entityIds.add(enemy.id);
+    if (!isInBounds(enemy.position, definition.board)) {
+      return rejectRunDefinition("invalid-starting-position");
+    }
+
+    const key = positionKey(enemy.position);
+    if (occupiedPositions.has(key)) return rejectRunDefinition("duplicate-occupancy");
+    occupiedPositions.add(key);
+  }
+}
+
+function rejectRunDefinition(reason: RunDefinitionRejectionReason): RejectedCreateRunResult {
+  return { accepted: false, reason };
 }
 
 function isInBounds(position: Position, board: Snapshot["board"]): boolean {
   return (
-    position.x >= 0 && position.x < board.width && position.y >= 0 && position.y < board.height
+    Number.isInteger(position.x) &&
+    Number.isInteger(position.y) &&
+    position.x >= 0 &&
+    position.x < board.width &&
+    position.y >= 0 &&
+    position.y < board.height
   );
+}
+
+function isPositiveInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function isNonNegativeInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function isDieRoll(value: number, sides: number, allowZero = false): boolean {
+  return Number.isSafeInteger(value) && value >= (allowZero ? 0 : 1) && value <= sides;
+}
+
+function isNonEmptyString(value: string): boolean {
+  return value.trim().length > 0;
 }
 
 function isAdjacent(a: Position, b: Position): boolean {
@@ -213,6 +377,17 @@ function isAdjacent(a: Position, b: Position): boolean {
 
 function samePosition(a: Position, b: Position): boolean {
   return a.x === b.x && a.y === b.y;
+}
+
+function positionKey(position: Position): string {
+  return `${position.x},${position.y}`;
+}
+
+function compareEnemies(
+  left: Snapshot["enemies"][number],
+  right: Snapshot["enemies"][number],
+): number {
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 }
 
 function add(position: Position, delta: Position): Position {
@@ -234,16 +409,6 @@ function hash(value: string): number {
     result = Math.imul(result ^ value.charCodeAt(index), 16777619);
   }
   return result >>> 0;
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
-    .join(",")}}`;
 }
 
 function clone<T>(value: T): T {
