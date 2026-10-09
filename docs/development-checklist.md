@@ -21,11 +21,11 @@ Verified locally on 2026-10-08:
 
 - [x] Add the AGPL-3.0 license selected in the PRD.
 - [x] Update `README.md` with the product summary, prerequisites, setup commands, and project status.
-- [ ] Extend Bun workspaces to cover both `apps/*` and `packages/*`.
-- [ ] Create `packages/contracts` for transport-safe schemas and public types.
-- [ ] Create `packages/content` for versioned seasonal content packs.
-- [ ] Create `packages/testing` for deterministic fixtures, simulations, and golden replays.
-- [ ] Create `apps/server` as the Cloudflare Worker entry point.
+- [x] Extend Bun workspaces to cover both `apps/*` and `packages/*`.
+- [x] Create `packages/contracts` for transport-safe schemas and public types.
+- [x] Create `packages/content` for versioned seasonal content packs.
+- [x] Create `packages/testing` for deterministic fixtures, simulations, and golden replays.
+- [x] Create `apps/server` as the Cloudflare Worker entry point.
 - [ ] Add formatting and linting with repository-wide scripts.
 - [ ] Add CI that installs from the frozen Bun lockfile, typechecks, lints, and tests.
 - [ ] Document local environment variables in an example file without committing secrets.
