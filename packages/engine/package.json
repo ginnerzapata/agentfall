@@ -1,0 +1,5 @@
+{
+  "name": "@agentfall/engine",
+  "private": true,
+  "type": "module"
+}
