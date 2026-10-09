@@ -1,6 +1,6 @@
 // These versions describe serialized values, not the contracts package version.
-export const SNAPSHOT_SCHEMA_VERSION = 1;
-export const ENGINE_EVENT_SCHEMA_VERSION = 1;
+export const SNAPSHOT_SCHEMA_VERSION = 3;
+export const ENGINE_EVENT_SCHEMA_VERSION = 3;
 
 export function canonicalStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -29,9 +29,20 @@ export type Board = {
   height: number;
 };
 
+export type Terrain = "floor" | "wall" | "entrance" | "objective" | "exit" | "secret";
+
+export type FloorTile = {
+  position: Position;
+  terrain: Terrain;
+  door?: "open" | "closed";
+};
+
+export type RememberedTile = FloorTile;
+
 export type CharacterState = {
   position: Position;
   health: number;
+  maxHealth: number;
 };
 
 export type EnemyState = {
@@ -41,12 +52,22 @@ export type EnemyState = {
   defense: number;
 };
 
+export type FloorObjectDefinition =
+  | { id: string; type: "chest"; position: Position; itemId: string }
+  | { id: string; type: "item"; position: Position; itemId: string }
+  | { id: string; type: "trap"; position: Position; damage: number }
+  | { id: string; type: "sanctuary"; position: Position; healing: number };
+
+export type FloorObjectState = FloorObjectDefinition & { used: boolean };
+
 export type RunDefinition = {
   seed: string;
   runId: string;
   rulesetVersion: string;
   generatorVersion: string;
   board: Board;
+  tiles: FloorTile[];
+  objects: FloorObjectDefinition[];
   character: CharacterState;
   enemies: EnemyState[];
 };
@@ -54,6 +75,9 @@ export type RunDefinition = {
 export type Action =
   | { type: "move"; direction: Direction }
   | { type: "attack"; targetId: string }
+  | { type: "interact"; target: Position }
+  | { type: "open-door"; target: Position }
+  | { type: "close-door"; target: Position }
   | { type: "end-turn" };
 
 export type EngineEvent = {
@@ -65,8 +89,14 @@ export type EngineEvent = {
       from: Position;
       to: Position;
       cost: 1;
+      triggeredTrap?: { id: string; damage: number };
     }
   | { type: "attack"; targetId: string; roll: number; damage: number; cost: 2 }
+  | { type: "interact"; target: Position; interaction: "objective" | "exit"; cost: 1 }
+  | { type: "open-chest"; target: Position; objectId: string; itemId: string; cost: 1 }
+  | { type: "pickup-item"; target: Position; objectId: string; itemId: string; cost: 1 }
+  | { type: "use-sanctuary"; target: Position; objectId: string; healing: number; cost: 1 }
+  | { type: "open-door" | "close-door"; target: Position; cost: 1 }
   | { type: "end-turn" }
 );
 
@@ -77,6 +107,12 @@ export type Snapshot = {
   rulesetVersion: string;
   generatorVersion: string;
   board: Board;
+  tiles: FloorTile[];
+  objects: FloorObjectState[];
+  rememberedTiles: RememberedTile[];
+  objectiveCollected: boolean;
+  exitUnlocked: boolean;
+  inventory: string[];
   turn: number;
   actionPoints: number;
   character: CharacterState;
@@ -88,28 +124,45 @@ export type Snapshot = {
 export type LegalAction =
   | { type: "move"; directions: Direction[] }
   | { type: "attack"; targetIds: string[] }
+  | { type: "interact"; targets: Position[] }
+  | { type: "open-door"; targets: Position[] }
+  | { type: "close-door"; targets: Position[] }
   | { type: "end-turn" };
+
+export type ObservedTile = FloorTile & { visibility: "visible" | "remembered" };
+export type ObservedFloorObject = Omit<FloorObjectState, "used">;
 
 export type Observation = {
   turn: number;
   actionPoints: number;
   character: CharacterState;
   enemies: EnemyState[];
+  objects: ObservedFloorObject[];
+  tiles: ObservedTile[];
+  ascii: string;
   legalActions: LegalAction[];
 };
 
 export type ActionRejectionReason =
   | "insufficient-action-points"
   | "blocked-destination"
-  | "invalid-target";
+  | "invalid-target"
+  | "invalid-interaction";
 
 export type RunDefinitionRejectionReason =
   | "invalid-board-dimensions"
   | "invalid-character-stats"
   | "invalid-enemy-stats"
+  | "invalid-floor-object"
+  | "duplicate-floor-object-id"
   | "duplicate-entity-id"
   | "duplicate-occupancy"
   | "invalid-starting-position"
+  | "invalid-floor-tiles"
+  | "duplicate-tile-position"
+  | "missing-entrance"
+  | "missing-objective"
+  | "missing-exit"
   | "invalid-ruleset-version"
   | "invalid-generator-version";
 

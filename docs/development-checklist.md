@@ -64,22 +64,22 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 ## 3. Grid, Vision, and Exploration
 
-- [ ] Model floors as tiles with walls, doors, terrain, entities, entrance, objective, and exit.
-- [ ] Implement four-direction movement and collision against walls, closed doors, and living entities.
-- [ ] Implement the six-tile vision radius and line-of-sight blocking.
-- [ ] Track visible tiles separately from remembered tiles.
-- [ ] Hide entities and mutable objects that are outside current vision.
-- [ ] Implement locked exits and a universal mandatory key/objective interaction.
-- [ ] Implement door opening and closing at the agreed AP cost.
-- [ ] Implement chests, item pickup, traps, sanctuary use, and optional secret areas.
-- [ ] Generate authoritative structured Observations.
-- [ ] Generate an ASCII view derived only from the same known structured state.
-- [ ] Expose only currently legal typed Actions and valid targets.
+- [x] Model floors as tiles with walls, doors, terrain, entities, entrance, objective, and exit.
+- [x] Implement four-direction movement and collision against walls, closed doors, and living entities.
+- [x] Implement the six-tile vision radius and line-of-sight blocking.
+- [x] Track visible tiles separately from remembered tiles.
+- [x] Hide entities and mutable objects that are outside current vision.
+- [x] Implement locked exits and a universal mandatory key/objective interaction.
+- [x] Implement door opening and closing at the agreed AP cost.
+- [x] Implement chests, item pickup, traps, sanctuary use, and optional secret areas.
+- [x] Generate authoritative structured Observations.
+- [x] Generate an ASCII view derived only from the same known structured state.
+- [x] Expose only currently legal typed Actions and valid targets.
 
 ### Exploration exit check
 
-- [ ] A harness can enter a fixture floor, explore under fog of war, obtain the objective, and leave without hidden information leaking.
-- [ ] Snapshot replay produces the same remembered map and ASCII output.
+- [x] A harness can enter a fixture floor, explore under fog of war, obtain the objective, and leave without hidden information leaking.
+- [x] Snapshot replay produces the same remembered map and ASCII output.
 
 ## 4. Combat and Character Rules
 

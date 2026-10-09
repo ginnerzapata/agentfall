@@ -15,14 +15,47 @@ const run: RunDefinition = {
   rulesetVersion: "season-zero-rules-1",
   generatorVersion: "season-zero-generator-1",
   board: { width: 3, height: 1 },
-  character: { position: { x: 0, y: 0 }, health: 12 },
+  tiles: [
+    { position: { x: 0, y: 0 }, terrain: "entrance" },
+    { position: { x: 1, y: 0 }, terrain: "objective" },
+    { position: { x: 2, y: 0 }, terrain: "exit" },
+  ],
+  objects: [],
+  character: { position: { x: 0, y: 0 }, health: 12, maxHealth: 12 },
   enemies: [{ id: "goblin", position: { x: 1, y: 0 }, health: 8, defense: 0 }],
 };
 
 function createSnapshot(definition: RunDefinition = run) {
-  const result = createRun(definition);
+  const result = createRun(withTilesForBoard(definition));
   if (!result.accepted) throw new Error("Expected the Run definition to be accepted.");
   return result.snapshot;
+}
+
+function withTilesForBoard(definition: RunDefinition): RunDefinition {
+  if (definition.tiles.length === definition.board.width * definition.board.height)
+    return definition;
+  const tiles = [] as RunDefinition["tiles"];
+  for (let y = 0; y < definition.board.height; y += 1) {
+    for (let x = 0; x < definition.board.width; x += 1) {
+      tiles.push({ position: { x, y }, terrain: "floor" });
+    }
+  }
+  const entrance = tiles.find(
+    (tile) =>
+      tile.position.x === definition.character.position.x &&
+      tile.position.y === definition.character.position.y,
+  );
+  if (!entrance) throw new Error("Expected character position on the board.");
+  entrance.terrain = "entrance";
+  const available = tiles.filter((tile) => tile !== entrance);
+  const objective = available.at(-1);
+  const exit = available.at(-2);
+  if (!objective || !exit) {
+    throw new Error("Expected a board large enough for the fixture floor.");
+  }
+  objective.terrain = "objective";
+  exit.terrain = "exit";
+  return { ...definition, tiles };
 }
 
 function applyAcceptedActions(actions: Parameters<typeof replay>[1], definition = run) {
@@ -90,8 +123,156 @@ describe("deterministic engine", () => {
     expect(JSON.stringify(snapshot)).toBe(before);
     expect(view.legalActions).toEqual([
       { type: "attack", targetIds: ["goblin"] },
+      { type: "interact", targets: [{ x: 1, y: 0 }] },
       { type: "end-turn" },
     ]);
+  });
+
+  test("keeps terrain remembered while hiding entities and terrain behind a wall", () => {
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 8, height: 1 },
+      tiles: [
+        { position: { x: 0, y: 0 }, terrain: "entrance" },
+        { position: { x: 1, y: 0 }, terrain: "floor" },
+        { position: { x: 2, y: 0 }, terrain: "wall" },
+        { position: { x: 3, y: 0 }, terrain: "floor" },
+        { position: { x: 4, y: 0 }, terrain: "floor" },
+        { position: { x: 5, y: 0 }, terrain: "floor" },
+        { position: { x: 6, y: 0 }, terrain: "objective" },
+        { position: { x: 7, y: 0 }, terrain: "exit" },
+      ],
+      enemies: [{ id: "hidden-goblin", position: { x: 4, y: 0 }, health: 8, defense: 0 }],
+    };
+
+    const view = observe(createSnapshot(definition));
+
+    expect(view.tiles).toEqual([
+      { position: { x: 0, y: 0 }, terrain: "entrance", visibility: "visible" },
+      { position: { x: 1, y: 0 }, terrain: "floor", visibility: "visible" },
+      { position: { x: 2, y: 0 }, terrain: "wall", visibility: "visible" },
+    ]);
+    expect(view.enemies).toEqual([]);
+    expect(view.ascii).toBe("@.#?????");
+  });
+
+  test("opens doors and unlocks an exit only after the objective interaction", () => {
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 3, height: 2 },
+      enemies: [],
+      tiles: [
+        { position: { x: 0, y: 0 }, terrain: "entrance" },
+        { position: { x: 1, y: 0 }, terrain: "floor", door: "closed" },
+        { position: { x: 2, y: 0 }, terrain: "objective" },
+        { position: { x: 0, y: 1 }, terrain: "wall" },
+        { position: { x: 1, y: 1 }, terrain: "wall" },
+        { position: { x: 2, y: 1 }, terrain: "exit" },
+      ],
+    };
+    let snapshot = createSnapshot(definition);
+
+    expect(act(snapshot, { type: "move", direction: "east" })).toEqual({
+      accepted: false,
+      reason: "blocked-destination",
+    });
+    const opened = act(snapshot, { type: "open-door", target: { x: 1, y: 0 } });
+    if (!opened.accepted) throw new Error("Expected the door to open.");
+    snapshot = opened.snapshot;
+    const moved = act(snapshot, { type: "move", direction: "east" });
+    if (!moved.accepted) throw new Error("Expected movement through the opened door.");
+    snapshot = moved.snapshot;
+
+    expect(act(snapshot, { type: "interact", target: { x: 2, y: 1 } })).toEqual({
+      accepted: false,
+      reason: "invalid-interaction",
+    });
+    const objective = act(snapshot, { type: "interact", target: { x: 2, y: 0 } });
+    if (!objective.accepted) throw new Error("Expected the objective interaction.");
+    snapshot = objective.snapshot;
+    const ontoObjective = act(snapshot, { type: "move", direction: "east" });
+    if (!ontoObjective.accepted) throw new Error("Expected movement onto the objective tile.");
+    const nextTurn = act(ontoObjective.snapshot, { type: "end-turn" });
+    if (!nextTurn.accepted) throw new Error("Expected turn to end.");
+    const exit = act(nextTurn.snapshot, { type: "interact", target: { x: 2, y: 1 } });
+    if (!exit.accepted) throw new Error("Expected the exit interaction.");
+
+    expect(exit.snapshot.exitUnlocked).toBe(true);
+    expect(replayEvents(definition, exit.snapshot.events)).toEqual({
+      accepted: true,
+      snapshot: exit.snapshot,
+    });
+  });
+
+  test("explores a fixture floor without leaking unseen content and replays its known state", () => {
+    const tiles: RunDefinition["tiles"] = [];
+    for (let y = 0; y < 2; y += 1) {
+      for (let x = 0; x < 10; x += 1) {
+        tiles.push({ position: { x, y }, terrain: x === 7 && y === 1 ? "secret" : "floor" });
+      }
+    }
+    const entrance = tiles.find((tile) => tile.position.x === 0 && tile.position.y === 0);
+    const objective = tiles.find((tile) => tile.position.x === 8 && tile.position.y === 0);
+    const exit = tiles.find((tile) => tile.position.x === 9 && tile.position.y === 0);
+    if (!entrance || !objective || !exit) throw new Error("Expected fixture tiles.");
+    entrance.terrain = "entrance";
+    objective.terrain = "objective";
+    exit.terrain = "exit";
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 10, height: 2 },
+      tiles,
+      objects: [
+        { id: "supply-chest", type: "chest", position: { x: 1, y: 0 }, itemId: "potion" },
+        { id: "spike-trap", type: "trap", position: { x: 2, y: 0 }, damage: 3 },
+        { id: "shrine", type: "sanctuary", position: { x: 3, y: 0 }, healing: 7 },
+        { id: "loose-tonic", type: "item", position: { x: 7, y: 0 }, itemId: "tonic" },
+      ],
+      enemies: [],
+      character: { position: { x: 0, y: 0 }, health: 8, maxHealth: 12 },
+    };
+    let snapshot = createSnapshot(definition);
+    const initial = observe(snapshot);
+
+    expect(initial.objects.map((object) => object.id)).toEqual([
+      "shrine",
+      "spike-trap",
+      "supply-chest",
+    ]);
+    expect(initial.tiles.some((tile) => tile.terrain === "secret")).toBe(false);
+    expect(initial.ascii).not.toContain("s");
+
+    const actions: Parameters<typeof replay>[1] = [
+      { type: "interact", target: { x: 1, y: 0 } },
+      { type: "move", direction: "east" },
+      { type: "move", direction: "east" },
+      { type: "interact", target: { x: 3, y: 0 } },
+      { type: "end-turn" },
+      { type: "move", direction: "east" },
+      { type: "move", direction: "east" },
+      { type: "move", direction: "east" },
+      { type: "move", direction: "east" },
+      { type: "end-turn" },
+      { type: "interact", target: { x: 7, y: 0 } },
+      { type: "move", direction: "east" },
+      { type: "interact", target: { x: 8, y: 0 } },
+      { type: "move", direction: "east" },
+      { type: "end-turn" },
+      { type: "interact", target: { x: 9, y: 0 } },
+    ];
+    for (const action of actions) {
+      const result = act(snapshot, action);
+      if (!result.accepted) throw new Error(`Expected ${action.type} to be accepted.`);
+      snapshot = result.snapshot;
+    }
+
+    expect(snapshot.character.health).toBe(12);
+    expect(snapshot.inventory).toEqual(["potion", "tonic"]);
+    expect(snapshot.exitUnlocked).toBe(true);
+    expect(snapshot.objects.every((object) => object.used)).toBe(true);
+    const replayed = replayEvents(definition, snapshot.events);
+    if (!replayed.accepted) throw new Error("Expected fixture events to replay.");
+    expect(observe(replayed.snapshot)).toEqual(observe(snapshot));
   });
 
   test("repeated Observations do not change a later outcome", () => {
@@ -128,7 +309,7 @@ describe("deterministic engine", () => {
   });
 
   test("rejects actions that cost more action points than remain", () => {
-    const noEnemyRun: RunDefinition = { ...run, enemies: [], board: { width: 2, height: 1 } };
+    const noEnemyRun: RunDefinition = { ...run, enemies: [], board: { width: 3, height: 2 } };
     const moves = ["east", "west", "east", "west"] as const;
     const exhausted = moves.reduce((snapshot, direction) => {
       const result = act(snapshot, { type: "move", direction });
@@ -223,7 +404,11 @@ describe("deterministic engine", () => {
         seed: `seed-${seed}`,
         runId: `run-${seed}`,
         board: { width: 3, height: 2 },
-        character: { position: { x: seed % 3, y: Math.floor(seed / 3) % 2 }, health: 12 },
+        character: {
+          position: { x: seed % 3, y: Math.floor(seed / 3) % 2 },
+          health: 12,
+          maxHealth: 12,
+        },
         enemies: [],
       });
 
