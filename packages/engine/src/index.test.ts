@@ -21,8 +21,29 @@ const run: RunDefinition = {
     { position: { x: 2, y: 0 }, terrain: "exit" },
   ],
   objects: [],
-  character: { position: { x: 0, y: 0 }, health: 12, maxHealth: 12 },
-  enemies: [{ id: "goblin", position: { x: 1, y: 0 }, health: 8, defense: 0 }],
+  character: {
+    position: { x: 0, y: 0 },
+    health: 12,
+    maxHealth: 12,
+    defense: 1,
+    movement: 1,
+    accuracy: 0,
+    power: 0,
+    focus: 0,
+  },
+  enemies: [
+    {
+      id: "goblin",
+      position: { x: 1, y: 0 },
+      health: 8,
+      maxHealth: 8,
+      defense: 0,
+      movement: 1,
+      accuracy: 0,
+      power: 0,
+      focus: 0,
+    },
+  ],
 };
 
 function createSnapshot(definition: RunDefinition = run) {
@@ -114,6 +135,30 @@ describe("deterministic engine", () => {
     expect(result.event.damage).toBeGreaterThanOrEqual(0);
   });
 
+  test("uses Accuracy, Power, and Defense in deterministic basic attacks", () => {
+    const definition: RunDefinition = {
+      ...run,
+      character: { ...run.character, accuracy: 120, power: 2 },
+      enemies: [{ ...run.enemies[0], defense: 100, health: 20, maxHealth: 20 }],
+    };
+    const snapshot = createSnapshot(definition);
+    const result = act(snapshot, { type: "attack", targetId: "goblin" });
+
+    if (!result.accepted || result.event.type !== "attack") {
+      throw new Error("Expected the attack to be accepted.");
+    }
+    expect(result.event.damage).toBeGreaterThanOrEqual(3);
+    expect(result.event.damage).toBeLessThanOrEqual(8);
+    expect(result.snapshot.enemies[0]?.health).toBe(20 - result.event.damage);
+    expect(observe(result.snapshot).character).toMatchObject({
+      defense: 1,
+      movement: 1,
+      accuracy: 120,
+      power: 2,
+      focus: 0,
+    });
+  });
+
   test("does not mutate a snapshot while observing it", () => {
     const snapshot = createSnapshot();
     const before = JSON.stringify(snapshot);
@@ -142,7 +187,13 @@ describe("deterministic engine", () => {
         { position: { x: 6, y: 0 }, terrain: "objective" },
         { position: { x: 7, y: 0 }, terrain: "exit" },
       ],
-      enemies: [{ id: "hidden-goblin", position: { x: 4, y: 0 }, health: 8, defense: 0 }],
+      enemies: [
+        {
+          ...run.enemies[0],
+          id: "hidden-goblin",
+          position: { x: 4, y: 0 },
+        },
+      ],
     };
 
     const view = observe(createSnapshot(definition));
@@ -229,7 +280,7 @@ describe("deterministic engine", () => {
         { id: "loose-tonic", type: "item", position: { x: 7, y: 0 }, itemId: "tonic" },
       ],
       enemies: [],
-      character: { position: { x: 0, y: 0 }, health: 8, maxHealth: 12 },
+      character: { ...run.character, position: { x: 0, y: 0 }, health: 8 },
     };
     let snapshot = createSnapshot(definition);
     const initial = observe(snapshot);
@@ -339,8 +390,15 @@ describe("deterministic engine", () => {
       ...run,
       board: { width: 3, height: 2 },
       enemies: [
-        { id: "goblin", position: { x: 1, y: 0 }, health: 8, defense: 0 },
-        { id: "archer", position: { x: 2, y: 1 }, health: 6, defense: 1 },
+        { ...run.enemies[0], id: "goblin", position: { x: 1, y: 0 } },
+        {
+          ...run.enemies[0],
+          id: "archer",
+          position: { x: 2, y: 1 },
+          health: 6,
+          maxHealth: 6,
+          defense: 1,
+        },
       ],
     };
     const reordered: RunDefinition = { ...ordered, enemies: [...ordered.enemies].reverse() };
@@ -357,7 +415,10 @@ describe("deterministic engine", () => {
     const definitions: Array<[RunDefinition, RunDefinitionRejectionReason]> = [
       [{ ...run, board: { width: 0, height: 1 } }, "invalid-board-dimensions"],
       [{ ...run, character: { ...run.character, health: 0 } }, "invalid-character-stats"],
+      [{ ...run, character: { ...run.character, movement: 0 } }, "invalid-character-stats"],
+      [{ ...run, character: { ...run.character, focus: -1 } }, "invalid-character-stats"],
       [{ ...run, enemies: [{ ...run.enemies[0], defense: -1 }] }, "invalid-enemy-stats"],
+      [{ ...run, enemies: [{ ...run.enemies[0], power: -1 }] }, "invalid-enemy-stats"],
       [
         {
           ...run,
@@ -405,6 +466,7 @@ describe("deterministic engine", () => {
         runId: `run-${seed}`,
         board: { width: 3, height: 2 },
         character: {
+          ...run.character,
           position: { x: seed % 3, y: Math.floor(seed / 3) % 2 },
           health: 12,
           maxHealth: 12,

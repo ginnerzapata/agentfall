@@ -1,6 +1,6 @@
 // These versions describe serialized values, not the contracts package version.
-export const SNAPSHOT_SCHEMA_VERSION = 3;
-export const ENGINE_EVENT_SCHEMA_VERSION = 3;
+export const SNAPSHOT_SCHEMA_VERSION = 4;
+export const ENGINE_EVENT_SCHEMA_VERSION = 4;
 
 export function canonicalStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -39,17 +39,28 @@ export type FloorTile = {
 
 export type RememberedTile = FloorTile;
 
-export type CharacterState = {
-  position: Position;
+/**
+ * The shared mechanical values for every combatant. Health is current health;
+ * maxHealth is its upper bound. Movement is retained as an allowance even
+ * though the initial move Action advances one tile per AP.
+ */
+export type CombatantStats = {
   health: number;
   maxHealth: number;
+  defense: number;
+  movement: number;
+  accuracy: number;
+  power: number;
+  focus: number;
 };
 
-export type EnemyState = {
+export type CharacterState = CombatantStats & {
+  position: Position;
+};
+
+export type EnemyState = CombatantStats & {
   id: string;
   position: Position;
-  health: number;
-  defense: number;
 };
 
 export type FloorObjectDefinition =

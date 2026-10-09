@@ -3,6 +3,8 @@ import type {
   Action,
   ActionRejectionReason,
   ActionResult,
+  CharacterState,
+  CombatantStats,
   CreateRunResult,
   Direction,
   EngineEvent,
@@ -31,9 +33,12 @@ export type {
   Action,
   ActionRejectionReason,
   ActionResult,
+  CharacterState,
+  CombatantStats,
   CreateRunResult,
   Direction,
   EngineEvent,
+  EnemyState,
   FloorObjectState,
   FloorTile,
   Observation,
@@ -224,7 +229,9 @@ function attack(snapshot: Snapshot, targetId: string): ActionResult {
   const eventIndex = snapshot.events.length;
   const roll = rollDie(snapshot, eventIndex, `attack:${targetId}:hit`, 20);
   const damage =
-    roll >= 10 + target.defense ? rollDie(snapshot, eventIndex, `attack:${targetId}:damage`, 6) : 0;
+    roll + snapshot.character.accuracy >= 10 + target.defense
+      ? rollDie(snapshot, eventIndex, `attack:${targetId}:damage`, 6) + snapshot.character.power
+      : 0;
   const event: EngineEvent = {
     schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
     type: "attack",
@@ -424,7 +431,7 @@ function applyRecordedEvent(
         event.cost !== 2 ||
         snapshot.actionPoints < event.cost ||
         !isDieRoll(event.roll, 20) ||
-        !isDieRoll(event.damage, 6, true) ||
+        !isValidRecordedAttackDamage(snapshot.character, event.damage) ||
         !target ||
         !isAdjacent(snapshot.character.position, target.position)
       ) {
@@ -593,13 +600,7 @@ function validateRunDefinition(definition: RunDefinition): RejectedCreateRunResu
   if (!isPositiveInteger(definition.board.width) || !isPositiveInteger(definition.board.height)) {
     return rejectRunDefinition("invalid-board-dimensions");
   }
-  if (!isPositiveInteger(definition.character.health)) {
-    return rejectRunDefinition("invalid-character-stats");
-  }
-  if (
-    !isPositiveInteger(definition.character.maxHealth) ||
-    definition.character.health > definition.character.maxHealth
-  ) {
+  if (!hasValidCombatantStats(definition.character)) {
     return rejectRunDefinition("invalid-character-stats");
   }
   if (!isNonEmptyString(definition.rulesetVersion)) {
@@ -619,7 +620,7 @@ function validateRunDefinition(definition: RunDefinition): RejectedCreateRunResu
   const entityIds = new Set<string>();
   const occupiedPositions = new Set([positionKey(definition.character.position)]);
   for (const enemy of definition.enemies) {
-    if (!isPositiveInteger(enemy.health) || !isNonNegativeInteger(enemy.defense)) {
+    if (!hasValidCombatantStats(enemy)) {
       return rejectRunDefinition("invalid-enemy-stats");
     }
     if (entityIds.has(enemy.id)) return rejectRunDefinition("duplicate-entity-id");
@@ -705,6 +706,26 @@ function isPositiveInteger(value: number): boolean {
 
 function isNonNegativeInteger(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0;
+}
+
+function hasValidCombatantStats(stats: CombatantStats): boolean {
+  return (
+    isPositiveInteger(stats.health) &&
+    isPositiveInteger(stats.maxHealth) &&
+    stats.health <= stats.maxHealth &&
+    isNonNegativeInteger(stats.defense) &&
+    isPositiveInteger(stats.movement) &&
+    isNonNegativeInteger(stats.accuracy) &&
+    isNonNegativeInteger(stats.power) &&
+    isNonNegativeInteger(stats.focus)
+  );
+}
+
+function isValidRecordedAttackDamage(attacker: CharacterState, damage: number): boolean {
+  return (
+    isNonNegativeInteger(damage) &&
+    (damage === 0 || (damage >= 1 + attacker.power && damage <= 6 + attacker.power))
+  );
 }
 
 function isDieRoll(value: number, sides: number, allowZero = false): boolean {
