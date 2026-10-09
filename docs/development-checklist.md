@@ -19,8 +19,8 @@ Verified locally on 2026-10-08:
 
 ## 1. Repository Foundation
 
-- [ ] Add the AGPL-3.0 license selected in the PRD.
-- [ ] Update `README.md` with the product summary, prerequisites, setup commands, and project status.
+- [x] Add the AGPL-3.0 license selected in the PRD.
+- [x] Update `README.md` with the product summary, prerequisites, setup commands, and project status.
 - [ ] Extend Bun workspaces to cover both `apps/*` and `packages/*`.
 - [ ] Create `packages/contracts` for transport-safe schemas and public types.
 - [ ] Create `packages/content` for versioned seasonal content packs.
