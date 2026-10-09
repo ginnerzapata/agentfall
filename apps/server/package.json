@@ -1,5 +1,5 @@
 {
-  "name":"@agentfall/server",
+  "name": "@agentfall/server",
   "private": true,
   "type": "module",
   "exports": "./src/index.ts"

@@ -113,7 +113,10 @@ export function observe(snapshot: Snapshot): Observation {
 }
 
 export function replay(definition: RunDefinition, actions: Action[]): Snapshot {
-  return actions.reduce((snapshot, action) => act(snapshot, action).snapshot, createRun(definition));
+  return actions.reduce(
+    (snapshot, action) => act(snapshot, action).snapshot,
+    createRun(definition),
+  );
 }
 
 function move(snapshot: Snapshot, direction: Direction): ActionResult {
@@ -145,9 +148,8 @@ function attack(snapshot: Snapshot, targetId: string): ActionResult {
 
   const eventIndex = snapshot.events.length;
   const roll = rollDie(snapshot, eventIndex, `attack:${targetId}:hit`, 20);
-  const damage = roll >= 10 + target.defense
-    ? rollDie(snapshot, eventIndex, `attack:${targetId}:damage`, 6)
-    : 0;
+  const damage =
+    roll >= 10 + target.defense ? rollDie(snapshot, eventIndex, `attack:${targetId}:damage`, 6) : 0;
   const event: EngineEvent = { type: "attack", targetId, roll, damage, cost: 2 };
   return applyEvent(snapshot, event, (next) => {
     const nextTarget = next.enemies.find((enemy) => enemy.id === targetId);
@@ -165,7 +167,11 @@ function endTurn(snapshot: Snapshot): ActionResult {
   });
 }
 
-function applyEvent(snapshot: Snapshot, event: EngineEvent, update: (next: Snapshot) => void): ActionResult {
+function applyEvent(
+  snapshot: Snapshot,
+  event: EngineEvent,
+  update: (next: Snapshot) => void,
+): ActionResult {
   const next = clone(snapshot);
   update(next);
   next.events.push(event);
@@ -181,8 +187,9 @@ function rollDie(snapshot: Snapshot, eventIndex: number, purpose: string, sides:
 }
 
 function canEnter(snapshot: Snapshot, position: Position): boolean {
-  return isInBounds(position, snapshot.board) && !snapshot.enemies.some(
-    (enemy) => enemy.health > 0 && samePosition(enemy.position, position),
+  return (
+    isInBounds(position, snapshot.board) &&
+    !snapshot.enemies.some((enemy) => enemy.health > 0 && samePosition(enemy.position, position))
   );
 }
 
@@ -195,7 +202,9 @@ function assertInBounds(position: Position, board: Snapshot["board"]): void {
 }
 
 function isInBounds(position: Position, board: Snapshot["board"]): boolean {
-  return position.x >= 0 && position.x < board.width && position.y >= 0 && position.y < board.height;
+  return (
+    position.x >= 0 && position.x < board.width && position.y >= 0 && position.y < board.height
+  );
 }
 
 function isAdjacent(a: Position, b: Position): boolean {
@@ -231,7 +240,10 @@ function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(",")}}`;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+    .join(",")}}`;
 }
 
 function clone<T>(value: T): T {

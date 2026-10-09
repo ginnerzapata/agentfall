@@ -7,9 +7,7 @@ const run = {
   runId: "account-17-character-3",
   board: { width: 3, height: 1 },
   character: { position: { x: 0, y: 0 }, health: 12 },
-  enemies: [
-    { id: "goblin", position: { x: 1, y: 0 }, health: 8, defense: 0 },
-  ],
+  enemies: [{ id: "goblin", position: { x: 1, y: 0 }, health: 8, defense: 0 }],
 };
 
 describe("deterministic engine", () => {
@@ -20,7 +18,10 @@ describe("deterministic engine", () => {
       { type: "attack" as const, targetId: "goblin" },
     ];
 
-    const live = actions.reduce((snapshot, action) => act(snapshot, action).snapshot, createRun(run));
+    const live = actions.reduce(
+      (snapshot, action) => act(snapshot, action).snapshot,
+      createRun(run),
+    );
     const reconstructed = replay(run, actions);
 
     expect(reconstructed).toEqual(live);

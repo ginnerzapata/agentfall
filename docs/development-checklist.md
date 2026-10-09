@@ -26,7 +26,7 @@ Verified locally on 2026-10-08:
 - [x] Create `packages/content` for versioned seasonal content packs.
 - [x] Create `packages/testing` for deterministic fixtures, simulations, and golden replays.
 - [x] Create `apps/server` as the Cloudflare Worker entry point.
-- [ ] Add formatting and linting with repository-wide scripts.
+- [x] Add formatting and linting with repository-wide scripts.
 - [ ] Add CI that installs from the frozen Bun lockfile, typechecks, lints, and tests.
 - [ ] Document local environment variables in an example file without committing secrets.
 
