@@ -1,57 +1,32 @@
-export type Direction = "north" | "east" | "south" | "west";
+import type {
+  AcceptedActionResult,
+  Action,
+  ActionRejectionReason,
+  ActionResult,
+  Direction,
+  EngineEvent,
+  Observation,
+  Position,
+  RejectedActionResult,
+  ReplayResult,
+  RunDefinition,
+  Snapshot,
+} from "@agentfall/contracts";
 
-export type Position = {
-  x: number;
-  y: number;
-};
-
-export type RunDefinition = {
-  seed: string;
-  runId: string;
-  board: { width: number; height: number };
-  character: { position: Position; health: number };
-  enemies: Array<{ id: string; position: Position; health: number; defense: number }>;
-};
-
-export type Action =
-  | { type: "move"; direction: Direction }
-  | { type: "attack"; targetId: string }
-  | { type: "end-turn" };
-
-export type EngineEvent =
-  | { type: "move"; direction: Direction; from: Position; to: Position; cost: 1 }
-  | { type: "attack"; targetId: string; roll: number; damage: number; cost: 2 }
-  | { type: "end-turn" };
-
-export type Snapshot = {
-  version: 1;
-  seed: string;
-  runId: string;
-  board: { width: number; height: number };
-  turn: number;
-  actionPoints: number;
-  character: { position: Position; health: number };
-  enemies: Array<{ id: string; position: Position; health: number; defense: number }>;
-  events: EngineEvent[];
-  checksum: string;
-};
-
-export type Observation = {
-  turn: number;
-  actionPoints: number;
-  character: { position: Position; health: number };
-  enemies: Array<{ id: string; position: Position; health: number; defense: number }>;
-  legalActions: Array<
-    | { type: "move"; directions: Direction[] }
-    | { type: "attack"; targetIds: string[] }
-    | { type: "end-turn" }
-  >;
-};
-
-export type ActionResult = {
-  snapshot: Snapshot;
-  event: EngineEvent;
-};
+export type {
+  AcceptedActionResult,
+  Action,
+  ActionRejectionReason,
+  ActionResult,
+  Direction,
+  EngineEvent,
+  Observation,
+  Position,
+  RejectedActionResult,
+  ReplayResult,
+  RunDefinition,
+  Snapshot,
+} from "@agentfall/contracts";
 
 export function createRun(definition: RunDefinition): Snapshot {
   if (definition.board.width < 1 || definition.board.height < 1) {
@@ -112,19 +87,27 @@ export function observe(snapshot: Snapshot): Observation {
   };
 }
 
-export function replay(definition: RunDefinition, actions: Action[]): Snapshot {
-  return actions.reduce(
-    (snapshot, action) => act(snapshot, action).snapshot,
-    createRun(definition),
-  );
+export function replay(definition: RunDefinition, actions: Action[]): ReplayResult {
+  let snapshot = createRun(definition);
+
+  for (const action of actions) {
+    const result = act(snapshot, action);
+    if (!result.accepted) {
+      return { accepted: false, snapshot, rejection: result };
+    }
+    snapshot = result.snapshot;
+  }
+
+  return { accepted: true, snapshot };
 }
 
 function move(snapshot: Snapshot, direction: Direction): ActionResult {
-  requireActionPoints(snapshot, 1);
+  const actionPointRejection = rejectForInsufficientActionPoints(snapshot, 1);
+  if (actionPointRejection) return actionPointRejection;
   const delta = directionEntries().find((entry) => entry.direction === direction)?.delta;
   if (!delta) throw new Error(`Unknown direction: ${direction}`);
   const to = add(snapshot.character.position, delta);
-  if (!canEnter(snapshot, to)) throw new Error("Cannot move to that tile.");
+  if (!canEnter(snapshot, to)) return reject("blocked-destination");
 
   const event: EngineEvent = {
     type: "move",
@@ -140,17 +123,24 @@ function move(snapshot: Snapshot, direction: Direction): ActionResult {
 }
 
 function attack(snapshot: Snapshot, targetId: string): ActionResult {
-  requireActionPoints(snapshot, 2);
+  const actionPointRejection = rejectForInsufficientActionPoints(snapshot, 2);
+  if (actionPointRejection) return actionPointRejection;
   const target = snapshot.enemies.find((enemy) => enemy.id === targetId && enemy.health > 0);
   if (!target || !isAdjacent(snapshot.character.position, target.position)) {
-    throw new Error("Target is not an adjacent living enemy.");
+    return reject("invalid-target");
   }
 
   const eventIndex = snapshot.events.length;
   const roll = rollDie(snapshot, eventIndex, `attack:${targetId}:hit`, 20);
   const damage =
     roll >= 10 + target.defense ? rollDie(snapshot, eventIndex, `attack:${targetId}:damage`, 6) : 0;
-  const event: EngineEvent = { type: "attack", targetId, roll, damage, cost: 2 };
+  const event: EngineEvent = {
+    type: "attack",
+    targetId,
+    roll,
+    damage,
+    cost: 2,
+  };
   return applyEvent(snapshot, event, (next) => {
     const nextTarget = next.enemies.find((enemy) => enemy.id === targetId);
     if (!nextTarget) throw new Error("Target disappeared during resolution.");
@@ -171,15 +161,18 @@ function applyEvent(
   snapshot: Snapshot,
   event: EngineEvent,
   update: (next: Snapshot) => void,
-): ActionResult {
+): AcceptedActionResult {
   const next = clone(snapshot);
   update(next);
   next.events.push(event);
-  return { snapshot: withChecksum(next), event };
+  return { accepted: true, snapshot: withChecksum(next), event };
 }
 
 function withChecksum(snapshot: Omit<Snapshot, "checksum">): Snapshot {
-  return { ...snapshot, checksum: hash(stableStringify(snapshot)).toString(16).padStart(8, "0") };
+  return {
+    ...snapshot,
+    checksum: hash(stableStringify(snapshot)).toString(16).padStart(8, "0"),
+  };
 }
 
 function rollDie(snapshot: Snapshot, eventIndex: number, purpose: string, sides: number): number {
@@ -193,8 +186,15 @@ function canEnter(snapshot: Snapshot, position: Position): boolean {
   );
 }
 
-function requireActionPoints(snapshot: Snapshot, cost: number): void {
-  if (snapshot.actionPoints < cost) throw new Error("Insufficient action points.");
+function rejectForInsufficientActionPoints(
+  snapshot: Snapshot,
+  cost: number,
+): RejectedActionResult | undefined {
+  return snapshot.actionPoints < cost ? reject("insufficient-action-points") : undefined;
+}
+
+function reject(reason: ActionRejectionReason): RejectedActionResult {
+  return { accepted: false, reason };
 }
 
 function assertInBounds(position: Position, board: Snapshot["board"]): void {

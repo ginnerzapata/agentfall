@@ -1,5 +1,8 @@
 {
   "name": "@agentfall/engine",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@agentfall/contracts": "workspace:*"
+  }
 }
