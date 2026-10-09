@@ -33,7 +33,7 @@ See the [product requirements](prd.md) for the complete accepted scope.
 - [Git](https://git-scm.com/)
 - [Bun](https://bun.sh/) 1.3 or newer
 
-No environment variables or external services are required for the current engine scaffold.
+No environment variables or external services are required for the current engine scaffold. The planned Worker and authentication configuration is documented in [`.env.example`](.env.example); copy it to `.env` only when working on those features and never commit its secrets.
 
 ## Setup
 

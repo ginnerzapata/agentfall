@@ -1,3 +1,8 @@
 # reference folder
 design
 node_modules
+
+# Local configuration may contain OAuth and credential-management secrets.
+.env
+.env.*
+!.env.example
