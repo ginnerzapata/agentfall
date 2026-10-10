@@ -144,6 +144,50 @@ describe("deterministic engine", () => {
     expect(advance.snapshot.events.map((event) => event.type)).toEqual(["move", "attack", "move"]);
   });
 
+  test("converts up to two unused AP into temporary Defense until the next Action", () => {
+    const definition: RunDefinition = { ...run, enemies: [], board: { width: 3, height: 2 } };
+    let snapshot = createSnapshot(definition);
+
+    const endedEarly = act(snapshot, { type: "end-turn" });
+    if (!endedEarly.accepted || endedEarly.event.type !== "end-turn") {
+      throw new Error("Expected the turn to end.");
+    }
+    snapshot = endedEarly.snapshot;
+    expect(endedEarly.event.temporaryDefense).toBe(2);
+    expect(observe(snapshot).character.temporaryDefense).toBe(2);
+
+    const nextAction = act(snapshot, { type: "move", direction: "east" });
+    if (!nextAction.accepted) throw new Error("Expected the next move to be accepted.");
+    expect(nextAction.snapshot.character.temporaryDefense).toBe(0);
+    expect(replayEvents(withTilesForBoard(definition), nextAction.snapshot.events)).toEqual({
+      accepted: true,
+      snapshot: nextAction.snapshot,
+    });
+
+    const oneUnused = applyAcceptedActions(
+      [
+        { type: "move", direction: "east" },
+        { type: "move", direction: "west" },
+        { type: "move", direction: "east" },
+        { type: "end-turn" },
+      ],
+      definition,
+    );
+    expect(oneUnused.character.temporaryDefense).toBe(1);
+
+    const noUnused = applyAcceptedActions(
+      [
+        { type: "move", direction: "east" },
+        { type: "move", direction: "west" },
+        { type: "move", direction: "east" },
+        { type: "move", direction: "west" },
+        { type: "end-turn" },
+      ],
+      definition,
+    );
+    expect(noUnused.character.temporaryDefense).toBe(0);
+  });
+
   test("replays an identical snapshot from the same actions", () => {
     const actions = [
       { type: "attack" as const, targetId: "goblin" },

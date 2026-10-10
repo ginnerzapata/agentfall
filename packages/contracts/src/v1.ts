@@ -1,7 +1,8 @@
 // These versions describe serialized values, not the contracts package version.
-export const SNAPSHOT_SCHEMA_VERSION = 4;
-export const ENGINE_EVENT_SCHEMA_VERSION = 4;
+export const SNAPSHOT_SCHEMA_VERSION = 5;
+export const ENGINE_EVENT_SCHEMA_VERSION = 5;
 export const ACTION_POINT_LIMIT = 4;
+export const MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS = 2;
 export const ACTION_POINT_COST = {
   move: 1,
   attack: 2,
@@ -62,8 +63,13 @@ export type CombatantStats = {
   focus: number;
 };
 
-export type CharacterState = CombatantStats & {
+export type CharacterDefinition = CombatantStats & {
   position: Position;
+};
+
+/** Defense granted for the interval between ending a turn and the next accepted Action. */
+export type CharacterState = CharacterDefinition & {
+  temporaryDefense: number;
 };
 
 export type EnemyState = CombatantStats & {
@@ -87,7 +93,7 @@ export type RunDefinition = {
   board: Board;
   tiles: FloorTile[];
   objects: FloorObjectDefinition[];
-  character: CharacterState;
+  character: CharacterDefinition;
   enemies: EnemyState[];
 };
 
@@ -116,7 +122,7 @@ export type EngineEvent = {
   | { type: "pickup-item"; target: Position; objectId: string; itemId: string; cost: 1 }
   | { type: "use-sanctuary"; target: Position; objectId: string; healing: number; cost: 1 }
   | { type: "open-door" | "close-door"; target: Position; cost: 1 }
-  | { type: "end-turn" }
+  | { type: "end-turn"; temporaryDefense: number }
 );
 
 export type Snapshot = {

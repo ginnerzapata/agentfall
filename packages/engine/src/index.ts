@@ -26,6 +26,7 @@ import {
   ACTION_POINT_LIMIT,
   canonicalStringify,
   ENGINE_EVENT_SCHEMA_VERSION,
+  MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS,
   SNAPSHOT_SCHEMA_VERSION,
 } from "@agentfall/contracts";
 
@@ -36,6 +37,7 @@ export type {
   ActionRejectionReason,
   ActionResult,
   CharacterState,
+  CharacterDefinition,
   CombatantStats,
   CreateRunResult,
   Direction,
@@ -55,7 +57,11 @@ export type {
   Snapshot,
 } from "@agentfall/contracts";
 
-export { ACTION_POINT_COST, ACTION_POINT_LIMIT } from "@agentfall/contracts";
+export {
+  ACTION_POINT_COST,
+  ACTION_POINT_LIMIT,
+  MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS,
+} from "@agentfall/contracts";
 
 export function createRun(definition: RunDefinition): CreateRunResult {
   const rejection = validateRunDefinition(definition);
@@ -78,7 +84,7 @@ export function createRun(definition: RunDefinition): CreateRunResult {
     inventory: [],
     turn: 1,
     actionPoints: ACTION_POINT_LIMIT,
-    character: clone(definition.character),
+    character: { ...clone(definition.character), temporaryDefense: 0 },
     enemies: clone(definition.enemies).sort(compareEnemies),
     events: [],
   };
@@ -256,13 +262,16 @@ function attack(snapshot: Snapshot, targetId: string): ActionResult {
 }
 
 function endTurn(snapshot: Snapshot): ActionResult {
+  const temporaryDefense = temporaryDefenseFromUnusedActionPoints(snapshot.actionPoints);
   const event: EngineEvent = {
     schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
     type: "end-turn",
+    temporaryDefense,
   };
   return applyEvent(snapshot, event, (next) => {
     next.turn += 1;
     next.actionPoints = ACTION_POINT_LIMIT;
+    next.character.temporaryDefense = event.temporaryDefense;
   });
 }
 
@@ -461,11 +470,17 @@ function applyRecordedEvent(
       };
     }
     case "end-turn":
+      if (
+        event.temporaryDefense !== temporaryDefenseFromUnusedActionPoints(snapshot.actionPoints)
+      ) {
+        return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
+      }
       return {
         accepted: true,
         snapshot: applyEvent(snapshot, event, (next) => {
           next.turn += 1;
           next.actionPoints = ACTION_POINT_LIMIT;
+          next.character.temporaryDefense = event.temporaryDefense;
         }).snapshot,
       };
     case "interact":
@@ -567,6 +582,7 @@ function applyEvent(
   update: (next: Snapshot) => void,
 ): AcceptedActionResult {
   const next = clone(snapshot);
+  if (event.type !== "end-turn") next.character.temporaryDefense = 0;
   update(next);
   updateRememberedTiles(next);
   next.events.push(clone(event));
@@ -582,6 +598,10 @@ function withChecksum(snapshot: Omit<Snapshot, "checksum">): Snapshot {
 
 function rollDie(snapshot: Snapshot, eventIndex: number, purpose: string, sides: number): number {
   return (hash(`${snapshot.seed}:${snapshot.runId}:${eventIndex}:${purpose}`) % sides) + 1;
+}
+
+function temporaryDefenseFromUnusedActionPoints(actionPoints: number): number {
+  return Math.min(actionPoints, MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS);
 }
 
 function canEnter(snapshot: Snapshot, position: Position): boolean {
