@@ -3,6 +3,9 @@ export const SNAPSHOT_SCHEMA_VERSION = 5;
 export const ENGINE_EVENT_SCHEMA_VERSION = 5;
 export const ACTION_POINT_LIMIT = 4;
 export const MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS = 2;
+export const D20_SIDES = 20;
+export const BASIC_ATTACK_HIT_DIFFICULTY = 10;
+export const BASIC_ATTACK_DAMAGE_DIE_SIDES = 6;
 export const ACTION_POINT_COST = {
   move: 1,
   attack: 2,

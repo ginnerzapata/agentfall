@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   ACTION_POINT_COST,
   ACTION_POINT_LIMIT,
+  BASIC_ATTACK_DAMAGE_DIE_SIDES,
+  BASIC_ATTACK_HIT_DIFFICULTY,
   canonicalStringify,
+  D20_SIDES,
   ENGINE_EVENT_SCHEMA_VERSION,
   type RunDefinition,
   type RunDefinitionRejectionReason,
@@ -257,6 +260,40 @@ describe("deterministic engine", () => {
       power: 2,
       focus: 0,
     });
+  });
+
+  test("resolves seeded d20 attacks with a small deterministic damage die", () => {
+    const guaranteedHit: RunDefinition = {
+      ...run,
+      character: { ...run.character, accuracy: D20_SIDES },
+      enemies: [{ ...run.enemies[0], health: 20, maxHealth: 20 }],
+    };
+    const first = act(createSnapshot(guaranteedHit), { type: "attack", targetId: "goblin" });
+    const second = act(createSnapshot(guaranteedHit), { type: "attack", targetId: "goblin" });
+
+    if (!first.accepted || !second.accepted || first.event.type !== "attack") {
+      throw new Error("Expected deterministic attacks to be accepted.");
+    }
+    expect(first).toEqual(second);
+    expect(first.event.roll).toBeGreaterThanOrEqual(1);
+    expect(first.event.roll).toBeLessThanOrEqual(D20_SIDES);
+    expect(first.event.damage).toBeGreaterThanOrEqual(1);
+    expect(first.event.damage).toBeLessThanOrEqual(BASIC_ATTACK_DAMAGE_DIE_SIDES);
+
+    const guaranteedMiss = act(
+      createSnapshot({
+        ...guaranteedHit,
+        character: { ...guaranteedHit.character, accuracy: 0 },
+        enemies: [
+          { ...guaranteedHit.enemies[0], defense: D20_SIDES + BASIC_ATTACK_HIT_DIFFICULTY },
+        ],
+      }),
+      { type: "attack", targetId: "goblin" },
+    );
+    if (!guaranteedMiss.accepted || guaranteedMiss.event.type !== "attack") {
+      throw new Error("Expected the deterministic miss to be accepted.");
+    }
+    expect(guaranteedMiss.event.damage).toBe(0);
   });
 
   test("does not mutate a snapshot while observing it", () => {

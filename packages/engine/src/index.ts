@@ -24,7 +24,10 @@ import type {
 import {
   ACTION_POINT_COST,
   ACTION_POINT_LIMIT,
+  BASIC_ATTACK_DAMAGE_DIE_SIDES,
+  BASIC_ATTACK_HIT_DIFFICULTY,
   canonicalStringify,
+  D20_SIDES,
   ENGINE_EVENT_SCHEMA_VERSION,
   MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS,
   SNAPSHOT_SCHEMA_VERSION,
@@ -60,6 +63,9 @@ export type {
 export {
   ACTION_POINT_COST,
   ACTION_POINT_LIMIT,
+  BASIC_ATTACK_DAMAGE_DIE_SIDES,
+  BASIC_ATTACK_HIT_DIFFICULTY,
+  D20_SIDES,
   MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS,
 } from "@agentfall/contracts";
 
@@ -240,10 +246,11 @@ function attack(snapshot: Snapshot, targetId: string): ActionResult {
   }
 
   const eventIndex = snapshot.events.length;
-  const roll = rollDie(snapshot, eventIndex, `attack:${targetId}:hit`, 20);
+  const roll = rollDie(snapshot, eventIndex, `attack:${targetId}:hit`, D20_SIDES);
   const damage =
-    roll + snapshot.character.accuracy >= 10 + target.defense
-      ? rollDie(snapshot, eventIndex, `attack:${targetId}:damage`, 6) + snapshot.character.power
+    roll + snapshot.character.accuracy >= BASIC_ATTACK_HIT_DIFFICULTY + target.defense
+      ? rollDie(snapshot, eventIndex, `attack:${targetId}:damage`, BASIC_ATTACK_DAMAGE_DIE_SIDES) +
+        snapshot.character.power
       : 0;
   const event: EngineEvent = {
     schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
@@ -452,7 +459,7 @@ function applyRecordedEvent(
       if (
         event.cost !== ACTION_POINT_COST.attack ||
         snapshot.actionPoints < event.cost ||
-        !isDieRoll(event.roll, 20) ||
+        !isDieRoll(event.roll, D20_SIDES) ||
         !isValidRecordedAttackDamage(snapshot.character, event.damage) ||
         !target ||
         !isAdjacent(snapshot.character.position, target.position)
@@ -758,7 +765,8 @@ function hasValidCombatantStats(stats: CombatantStats): boolean {
 function isValidRecordedAttackDamage(attacker: CharacterState, damage: number): boolean {
   return (
     isNonNegativeInteger(damage) &&
-    (damage === 0 || (damage >= 1 + attacker.power && damage <= 6 + attacker.power))
+    (damage === 0 ||
+      (damage >= 1 + attacker.power && damage <= BASIC_ATTACK_DAMAGE_DIE_SIDES + attacker.power))
   );
 }
 
