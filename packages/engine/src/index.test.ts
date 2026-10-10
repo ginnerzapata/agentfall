@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ACTION_POINT_COST,
+  ACTION_POINT_LIMIT,
   canonicalStringify,
   ENGINE_EVENT_SCHEMA_VERSION,
   type RunDefinition,
@@ -88,6 +90,60 @@ function applyAcceptedActions(actions: Parameters<typeof replay>[1], definition 
 }
 
 describe("deterministic engine", () => {
+  test("starts turns with four AP and publishes the agreed action costs", () => {
+    expect(ACTION_POINT_LIMIT).toBe(4);
+    expect(ACTION_POINT_COST).toEqual({
+      move: 1,
+      attack: 2,
+      interact: 1,
+      openDoor: 1,
+      closeDoor: 1,
+    });
+
+    let snapshot = createSnapshot({ ...run, enemies: [], board: { width: 3, height: 2 } });
+    expect(snapshot.actionPoints).toBe(ACTION_POINT_LIMIT);
+    const moved = act(snapshot, { type: "move", direction: "east" });
+    if (!moved.accepted) throw new Error("Expected the move to be accepted.");
+    snapshot = moved.snapshot;
+    expect(snapshot.actionPoints).toBe(ACTION_POINT_LIMIT - ACTION_POINT_COST.move);
+
+    const nextTurn = act(snapshot, { type: "end-turn" });
+    if (!nextTurn.accepted) throw new Error("Expected the turn to end.");
+    expect(nextTurn.snapshot.actionPoints).toBe(ACTION_POINT_LIMIT);
+  });
+
+  test("allows movement before and after an attack in the same turn", () => {
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 4, height: 1 },
+      tiles: [
+        { position: { x: 0, y: 0 }, terrain: "entrance" },
+        { position: { x: 1, y: 0 }, terrain: "floor" },
+        { position: { x: 2, y: 0 }, terrain: "objective" },
+        { position: { x: 3, y: 0 }, terrain: "exit" },
+      ],
+      character: { ...run.character, accuracy: 20 },
+      enemies: [{ ...run.enemies[0], position: { x: 2, y: 0 }, health: 1, maxHealth: 1 }],
+    };
+    let snapshot = createSnapshot(definition);
+
+    const approach = act(snapshot, { type: "move", direction: "east" });
+    if (!approach.accepted) throw new Error("Expected the approach move to be accepted.");
+    snapshot = approach.snapshot;
+
+    const attack = act(snapshot, { type: "attack", targetId: "goblin" });
+    if (!attack.accepted) throw new Error("Expected the attack to be accepted.");
+    snapshot = attack.snapshot;
+
+    const advance = act(snapshot, { type: "move", direction: "east" });
+    if (!advance.accepted) throw new Error("Expected the advance move to be accepted.");
+
+    expect(advance.snapshot.turn).toBe(1);
+    expect(advance.snapshot.character.position).toEqual({ x: 2, y: 0 });
+    expect(advance.snapshot.actionPoints).toBe(0);
+    expect(advance.snapshot.events.map((event) => event.type)).toEqual(["move", "attack", "move"]);
+  });
+
   test("replays an identical snapshot from the same actions", () => {
     const actions = [
       { type: "attack" as const, targetId: "goblin" },

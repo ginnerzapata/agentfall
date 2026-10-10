@@ -1,6 +1,14 @@
 // These versions describe serialized values, not the contracts package version.
 export const SNAPSHOT_SCHEMA_VERSION = 4;
 export const ENGINE_EVENT_SCHEMA_VERSION = 4;
+export const ACTION_POINT_LIMIT = 4;
+export const ACTION_POINT_COST = {
+  move: 1,
+  attack: 2,
+  interact: 1,
+  openDoor: 1,
+  closeDoor: 1,
+} as const;
 
 export function canonicalStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {

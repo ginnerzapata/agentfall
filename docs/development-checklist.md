@@ -84,8 +84,8 @@ The commands must pass from a clean checkout without undocumented manual setup.
 ## 4. Combat and Character Rules
 
 - [x] Implement Health, Defense, Movement, Accuracy, Power, and Focus.
-- [ ] Implement four AP per combat turn and the agreed Action costs.
-- [ ] Allow movement before and after other Actions in one turn.
+- [x] Implement four AP per combat turn and the agreed Action costs.
+- [x] Allow movement before and after other Actions in one turn.
 - [ ] Convert up to two unused AP into temporary Defense when ending a turn.
 - [ ] Implement seeded d20 attack resolution and small damage dice.
 - [ ] Expose hit probability and damage range without exposing future rolls.

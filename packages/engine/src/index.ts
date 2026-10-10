@@ -22,6 +22,8 @@ import type {
   Snapshot,
 } from "@agentfall/contracts";
 import {
+  ACTION_POINT_COST,
+  ACTION_POINT_LIMIT,
   canonicalStringify,
   ENGINE_EVENT_SCHEMA_VERSION,
   SNAPSHOT_SCHEMA_VERSION,
@@ -53,6 +55,8 @@ export type {
   Snapshot,
 } from "@agentfall/contracts";
 
+export { ACTION_POINT_COST, ACTION_POINT_LIMIT } from "@agentfall/contracts";
+
 export function createRun(definition: RunDefinition): CreateRunResult {
   const rejection = validateRunDefinition(definition);
   if (rejection) return rejection;
@@ -73,7 +77,7 @@ export function createRun(definition: RunDefinition): CreateRunResult {
     exitUnlocked: false,
     inventory: [],
     turn: 1,
-    actionPoints: 4,
+    actionPoints: ACTION_POINT_LIMIT,
     character: clone(definition.character),
     enemies: clone(definition.enemies).sort(compareEnemies),
     events: [],
@@ -189,7 +193,7 @@ export function replayEvents(definition: RunDefinition, events: EngineEvent[]): 
 }
 
 function move(snapshot: Snapshot, direction: Direction): ActionResult {
-  const actionPointRejection = rejectForInsufficientActionPoints(snapshot, 1);
+  const actionPointRejection = rejectForInsufficientActionPoints(snapshot, ACTION_POINT_COST.move);
   if (actionPointRejection) return actionPointRejection;
   const delta = directionEntries().find((entry) => entry.direction === direction)?.delta;
   if (!delta) throw new Error(`Unknown direction: ${direction}`);
@@ -203,7 +207,7 @@ function move(snapshot: Snapshot, direction: Direction): ActionResult {
     direction,
     from: clone(snapshot.character.position),
     to,
-    cost: 1,
+    cost: ACTION_POINT_COST.move,
     ...(trap ? { triggeredTrap: { id: trap.id, damage: trap.damage } } : {}),
   };
   return applyEvent(snapshot, event, (next) => {
@@ -219,7 +223,10 @@ function move(snapshot: Snapshot, direction: Direction): ActionResult {
 }
 
 function attack(snapshot: Snapshot, targetId: string): ActionResult {
-  const actionPointRejection = rejectForInsufficientActionPoints(snapshot, 2);
+  const actionPointRejection = rejectForInsufficientActionPoints(
+    snapshot,
+    ACTION_POINT_COST.attack,
+  );
   if (actionPointRejection) return actionPointRejection;
   const target = snapshot.enemies.find((enemy) => enemy.id === targetId && enemy.health > 0);
   if (!target || !isAdjacent(snapshot.character.position, target.position)) {
@@ -238,7 +245,7 @@ function attack(snapshot: Snapshot, targetId: string): ActionResult {
     targetId,
     roll,
     damage,
-    cost: 2,
+    cost: ACTION_POINT_COST.attack,
   };
   return applyEvent(snapshot, event, (next) => {
     const nextTarget = next.enemies.find((enemy) => enemy.id === targetId);
@@ -255,12 +262,15 @@ function endTurn(snapshot: Snapshot): ActionResult {
   };
   return applyEvent(snapshot, event, (next) => {
     next.turn += 1;
-    next.actionPoints = 4;
+    next.actionPoints = ACTION_POINT_LIMIT;
   });
 }
 
 function interact(snapshot: Snapshot, target: Position): ActionResult {
-  const actionPointRejection = rejectForInsufficientActionPoints(snapshot, 1);
+  const actionPointRejection = rejectForInsufficientActionPoints(
+    snapshot,
+    ACTION_POINT_COST.interact,
+  );
   if (actionPointRejection) return actionPointRejection;
   if (!isAdjacent(snapshot.character.position, target)) return reject("invalid-interaction");
   const tile = tileAt(snapshot, target);
@@ -294,7 +304,7 @@ function applyInteraction(
     type: "interact",
     target: clone(target),
     interaction,
-    cost: 1,
+    cost: ACTION_POINT_COST.interact,
   };
   return applyEvent(snapshot, event, (next) => {
     if (interaction === "objective") next.objectiveCollected = true;
@@ -319,7 +329,7 @@ function useItemObject(
           target: clone(target),
           objectId: object.id,
           itemId: object.itemId,
-          cost: 1,
+          cost: ACTION_POINT_COST.interact,
         }
       : {
           schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
@@ -327,7 +337,7 @@ function useItemObject(
           target: clone(target),
           objectId: object.id,
           itemId: object.itemId,
-          cost: 1,
+          cost: ACTION_POINT_COST.interact,
         };
   return applyEvent(snapshot, event, (next) => {
     const nextObject = objectAt(next, target);
@@ -351,7 +361,7 @@ function useSanctuary(
     target: clone(target),
     objectId: object.id,
     healing: object.healing,
-    cost: 1,
+    cost: ACTION_POINT_COST.interact,
   };
   return applyEvent(snapshot, event, (next) => {
     const nextObject = objectAt(next, target, "sanctuary");
@@ -367,7 +377,10 @@ function useSanctuary(
 }
 
 function changeDoor(snapshot: Snapshot, target: Position, door: "open" | "closed"): ActionResult {
-  const actionPointRejection = rejectForInsufficientActionPoints(snapshot, 1);
+  const actionPointRejection = rejectForInsufficientActionPoints(
+    snapshot,
+    door === "open" ? ACTION_POINT_COST.openDoor : ACTION_POINT_COST.closeDoor,
+  );
   if (actionPointRejection) return actionPointRejection;
   if (!isAdjacent(snapshot.character.position, target)) return reject("invalid-interaction");
   const tile = tileAt(snapshot, target);
@@ -376,7 +389,7 @@ function changeDoor(snapshot: Snapshot, target: Position, door: "open" | "closed
     schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
     type: door === "open" ? "open-door" : "close-door",
     target: clone(target),
-    cost: 1,
+    cost: door === "open" ? ACTION_POINT_COST.openDoor : ACTION_POINT_COST.closeDoor,
   };
   return applyEvent(snapshot, event, (next) => {
     const nextTile = tileAt(next, target);
@@ -399,7 +412,7 @@ function applyRecordedEvent(
     case "move": {
       const delta = directionEntries().find((entry) => entry.direction === event.direction)?.delta;
       if (
-        event.cost !== 1 ||
+        event.cost !== ACTION_POINT_COST.move ||
         !delta ||
         snapshot.actionPoints < event.cost ||
         !samePosition(snapshot.character.position, event.from) ||
@@ -428,7 +441,7 @@ function applyRecordedEvent(
         (enemy) => enemy.id === event.targetId && enemy.health > 0,
       );
       if (
-        event.cost !== 2 ||
+        event.cost !== ACTION_POINT_COST.attack ||
         snapshot.actionPoints < event.cost ||
         !isDieRoll(event.roll, 20) ||
         !isValidRecordedAttackDamage(snapshot.character, event.damage) ||
@@ -452,12 +465,12 @@ function applyRecordedEvent(
         accepted: true,
         snapshot: applyEvent(snapshot, event, (next) => {
           next.turn += 1;
-          next.actionPoints = 4;
+          next.actionPoints = ACTION_POINT_LIMIT;
         }).snapshot,
       };
     case "interact":
       if (
-        event.cost !== 1 ||
+        event.cost !== ACTION_POINT_COST.interact ||
         !isAdjacent(snapshot.character.position, event.target) ||
         !canReplayInteraction(snapshot, event)
       ) {
@@ -476,7 +489,7 @@ function applyRecordedEvent(
       const type = event.type === "open-chest" ? "chest" : "item";
       const object = objectAt(snapshot, event.target, type);
       if (
-        event.cost !== 1 ||
+        event.cost !== ACTION_POINT_COST.interact ||
         !isAdjacent(snapshot.character.position, event.target) ||
         !object ||
         object.id !== event.objectId ||
@@ -499,7 +512,7 @@ function applyRecordedEvent(
     case "use-sanctuary": {
       const sanctuary = objectAt(snapshot, event.target, "sanctuary");
       if (
-        event.cost !== 1 ||
+        event.cost !== ACTION_POINT_COST.interact ||
         !isAdjacent(snapshot.character.position, event.target) ||
         !sanctuary ||
         sanctuary.id !== event.objectId ||
@@ -526,7 +539,8 @@ function applyRecordedEvent(
       const door = event.type === "open-door" ? "open" : "closed";
       const tile = tileAt(snapshot, event.target);
       if (
-        event.cost !== 1 ||
+        event.cost !==
+          (door === "open" ? ACTION_POINT_COST.openDoor : ACTION_POINT_COST.closeDoor) ||
         !isAdjacent(snapshot.character.position, event.target) ||
         !tile ||
         tile.door === undefined ||
