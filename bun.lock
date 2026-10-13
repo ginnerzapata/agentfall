@@ -27,6 +27,9 @@
     },
     "packages/testing": {
       "name": "@agentfall/testing",
+      "dependencies": {
+        "@agentfall/contracts": "workspace:*",
+      },
     },
   },
   "packages": {

@@ -11,8 +11,16 @@ import {
   type RunDefinitionRejectionReason,
   SNAPSHOT_SCHEMA_VERSION,
 } from "@agentfall/contracts";
+import { classActionChoiceSimulations, combatGoldenFixtures } from "../../testing/src/index";
 
-import { act, createRun, observe, replay, replayEvents } from "./index";
+import {
+  act,
+  createRun,
+  evaluateMandatoryObjectiveSolvability,
+  observe,
+  replay,
+  replayEvents,
+} from "./index";
 
 const run: RunDefinition = {
   seed: "season-zero-commitment-secret",
@@ -222,6 +230,33 @@ describe("deterministic engine", () => {
     expect(replayEvents(run, live.events)).toEqual({ accepted: true, snapshot: live });
   });
 
+  test("matches the versioned golden combat fixtures", () => {
+    for (const fixture of combatGoldenFixtures) {
+      const result = replay(fixture.definition, fixture.actions);
+      if (!result.accepted) throw new Error(`Expected ${fixture.name} to replay.`);
+      expect(canonicalStringify(result.snapshot.events), fixture.name).toBe(
+        fixture.canonicalEvents,
+      );
+      expect(replayEvents(fixture.definition, result.snapshot.events), fixture.name).toEqual({
+        accepted: true,
+        snapshot: result.snapshot,
+      });
+    }
+  });
+
+  test("gives every class a distinct set of meaningful legal Action choices", () => {
+    const profiles = classActionChoiceSimulations.map((simulation) => {
+      const created = createRun(simulation.fixture.definition);
+      if (!created.accepted) throw new Error(`Expected ${simulation.characterClass} simulation.`);
+      const actionTypes = observe(created.snapshot).legalActions.map((action) => action.type);
+      expect(actionTypes, simulation.characterClass).toEqual(
+        expect.arrayContaining(simulation.expectedSignatureActions),
+      );
+      return actionTypes.sort().join(",");
+    });
+    expect(new Set(profiles).size).toBe(classActionChoiceSimulations.length);
+  });
+
   test("records the resolved random rolls in an accepted attack event", () => {
     const snapshot = createSnapshot();
     const result = act(snapshot, { type: "attack", targetId: "goblin" });
@@ -308,6 +343,358 @@ describe("deterministic engine", () => {
       { type: "interact", targets: [{ x: 1, y: 0 }] },
       { type: "end-turn" },
     ]);
+    expect(view.attackPreviews).toEqual([
+      {
+        targetId: "goblin",
+        hitProbability: 11 / 20,
+        damageRange: { minimum: 0, maximum: BASIC_ATTACK_DAMAGE_DIE_SIDES },
+      },
+    ]);
+    expect(view.inCombat).toBe(true);
+  });
+
+  test("commits permanent death from a lethal event and rejects later Actions", () => {
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 3, height: 2 },
+      enemies: [],
+      character: { ...run.character, health: 2, maxHealth: 2 },
+      objects: [{ id: "fatal-spikes", type: "trap", position: { x: 1, y: 0 }, damage: 2 }],
+    };
+    const result = act(createSnapshot(definition), { type: "move", direction: "east" });
+
+    if (!result.accepted || result.event.type !== "move" || !result.event.triggeredTrap) {
+      throw new Error("Expected the trap move to be accepted.");
+    }
+    expect(result.event.triggeredTrap.outcome).toEqual({
+      health: 0,
+      died: true,
+      resurrected: false,
+    });
+    expect(result.snapshot.character).toMatchObject({
+      health: 0,
+      dead: true,
+      resurrectionCharges: 0,
+    });
+    expect(act(result.snapshot, { type: "end-turn" })).toEqual({
+      accepted: false,
+      reason: "character-dead",
+    });
+    expect(replayEvents(withTilesForBoard(definition), result.snapshot.events)).toEqual({
+      accepted: true,
+      snapshot: result.snapshot,
+    });
+  });
+
+  test("automatically consumes one resurrection charge instead of committing lethal death", () => {
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 3, height: 2 },
+      enemies: [],
+      character: { ...run.character, health: 2, maxHealth: 2, resurrectionCharges: 1 },
+      objects: [{ id: "fatal-spikes", type: "trap", position: { x: 1, y: 0 }, damage: 2 }],
+    };
+    const result = act(createSnapshot(definition), { type: "move", direction: "east" });
+
+    if (!result.accepted || result.event.type !== "move" || !result.event.triggeredTrap) {
+      throw new Error("Expected the trap move to be accepted.");
+    }
+    expect(result.event.triggeredTrap.outcome).toEqual({
+      health: 1,
+      died: false,
+      resurrected: true,
+    });
+    expect(result.snapshot.character).toMatchObject({
+      health: 1,
+      dead: false,
+      resurrectionCharges: 0,
+    });
+  });
+
+  test("makes retreat spatial by pursuing across open tiles but not through closed doors", () => {
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 5, height: 1 },
+      tiles: [
+        { position: { x: 0, y: 0 }, terrain: "entrance" },
+        { position: { x: 1, y: 0 }, terrain: "floor" },
+        { position: { x: 2, y: 0 }, terrain: "objective" },
+        { position: { x: 3, y: 0 }, terrain: "floor", door: "closed" },
+        { position: { x: 4, y: 0 }, terrain: "exit" },
+      ],
+      enemies: [{ ...run.enemies[0], position: { x: 4, y: 0 } }],
+    };
+    const beforeDoor = createSnapshot(definition);
+    const delayed = act(beforeDoor, { type: "end-turn" });
+    if (!delayed.accepted || delayed.event.type !== "end-turn") {
+      throw new Error("Expected the turn to end.");
+    }
+    expect(delayed.event.enemyMoves).toEqual([]);
+    expect(delayed.snapshot.enemies[0]?.position).toEqual({ x: 4, y: 0 });
+
+    const openDoorDefinition: RunDefinition = {
+      ...definition,
+      tiles: definition.tiles.map((tile) =>
+        tile.position.x === 3 ? { ...tile, door: "open" as const } : tile,
+      ),
+    };
+    const pursued = act(createSnapshot(openDoorDefinition), { type: "end-turn" });
+    if (!pursued.accepted || pursued.event.type !== "end-turn") {
+      throw new Error("Expected the turn to end.");
+    }
+    expect(pursued.event.enemyMoves).toEqual([
+      { enemyId: "goblin", from: { x: 4, y: 0 }, to: { x: 3, y: 0 } },
+    ]);
+    expect(pursued.snapshot.enemies[0]?.position).toEqual({ x: 3, y: 0 });
+    expect(replayEvents(openDoorDefinition, pursued.snapshot.events)).toEqual({
+      accepted: true,
+      snapshot: pursued.snapshot,
+    });
+  });
+
+  test("evaluates distinct deterministic enemy behavior trees with seeded tie resolution", () => {
+    const tiles: RunDefinition["tiles"] = [];
+    for (let y = 0; y < 3; y += 1) {
+      for (let x = 0; x < 3; x += 1) {
+        tiles.push({ position: { x, y }, terrain: "floor" });
+      }
+    }
+    const entrance = tiles.find((tile) => tile.position.x === 0 && tile.position.y === 0);
+    const objective = tiles.find((tile) => tile.position.x === 0 && tile.position.y === 2);
+    const exit = tiles.find((tile) => tile.position.x === 2 && tile.position.y === 2);
+    if (!entrance || !objective || !exit) throw new Error("Expected fixture tiles.");
+    entrance.terrain = "entrance";
+    objective.terrain = "objective";
+    exit.terrain = "exit";
+    const tied: RunDefinition = {
+      ...run,
+      board: { width: 3, height: 3 },
+      tiles,
+      enemies: [
+        { ...run.enemies[0], position: { x: 2, y: 1 }, behavior: "pursue" },
+        { ...run.enemies[0], id: "sentinel", position: { x: 2, y: 2 }, behavior: "hold" },
+      ],
+    };
+    const first = act(createSnapshot(tied), { type: "end-turn" });
+    const second = act(createSnapshot(tied), { type: "end-turn" });
+    if (!first.accepted || !second.accepted || first.event.type !== "end-turn") {
+      throw new Error("Expected the turns to end.");
+    }
+    expect(first).toEqual(second);
+    expect(first.event.enemyMoves).toContainEqual({
+      enemyId: "goblin",
+      from: { x: 2, y: 1 },
+      to: expect.any(Object),
+    });
+    const goblinMove = first.event.enemyMoves.find((move) => move.enemyId === "goblin");
+    if (!goblinMove) throw new Error("Expected the pursuing goblin to move.");
+    expect(goblinMove.to).toSatisfy(
+      (position: { x: number; y: number }) =>
+        (position.x === 1 && position.y === 1) || (position.x === 2 && position.y === 0),
+    );
+    expect(first.event.enemyMoves.some((move) => move.enemyId === "sentinel")).toBe(false);
+
+    const skirmisher: RunDefinition = {
+      ...tied,
+      enemies: [{ ...run.enemies[0], position: { x: 1, y: 0 }, behavior: "skirmish" }],
+    };
+    const retreated = act(createSnapshot(skirmisher), { type: "end-turn" });
+    if (!retreated.accepted || retreated.event.type !== "end-turn") {
+      throw new Error("Expected the turn to end.");
+    }
+    expect(retreated.event.enemyMoves).toHaveLength(1);
+    const skirmisherMove = retreated.event.enemyMoves[0];
+    if (!skirmisherMove) throw new Error("Expected the skirmisher to retreat.");
+    expect(skirmisherMove.enemyId).toBe("goblin");
+    expect(skirmisherMove.to).toSatisfy(
+      (position: { x: number; y: number }) => position.x + position.y === 2,
+    );
+  });
+
+  test("implements Vanguard Guard and Shove collision behavior", () => {
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 5, height: 2 },
+      tiles: [
+        { position: { x: 0, y: 0 }, terrain: "floor" },
+        { position: { x: 1, y: 0 }, terrain: "entrance" },
+        { position: { x: 2, y: 0 }, terrain: "floor" },
+        { position: { x: 3, y: 0 }, terrain: "wall" },
+        { position: { x: 4, y: 0 }, terrain: "floor" },
+        { position: { x: 0, y: 1 }, terrain: "objective" },
+        { position: { x: 1, y: 1 }, terrain: "floor" },
+        { position: { x: 2, y: 1 }, terrain: "floor" },
+        { position: { x: 3, y: 1 }, terrain: "floor" },
+        { position: { x: 4, y: 1 }, terrain: "exit" },
+      ],
+      character: { ...run.character, position: { x: 1, y: 0 }, class: "vanguard", power: 2 },
+      enemies: [{ ...run.enemies[0], position: { x: 2, y: 0 }, health: 8, maxHealth: 8 }],
+    };
+    const guarded = act(createSnapshot(definition), { type: "guard" });
+    if (!guarded.accepted || guarded.event.type !== "guard") {
+      throw new Error("Expected Guard to be accepted.");
+    }
+    expect(guarded.snapshot.character.guardedTiles).toContainEqual({ x: 2, y: 0 });
+    const shoved = act(guarded.snapshot, { type: "shove", targetId: "goblin" });
+    if (!shoved.accepted || shoved.event.type !== "shove") {
+      throw new Error("Expected Shove to be accepted.");
+    }
+    expect(shoved.event).toMatchObject({ targetId: "goblin", damage: 3, cost: 2 });
+    expect(shoved.event.to).toBeUndefined();
+    expect(shoved.snapshot.enemies[0]?.health).toBe(5);
+    expect(replayEvents(definition, shoved.snapshot.events)).toEqual({
+      accepted: true,
+      snapshot: shoved.snapshot,
+    });
+  });
+
+  test("implements Ranger Scout line-of-sight and Disengaging Shot", () => {
+    const scoutDefinition: RunDefinition = {
+      ...run,
+      board: { width: 9, height: 1 },
+      tiles: Array.from({ length: 9 }, (_, x) => ({
+        position: { x, y: 0 },
+        terrain:
+          x === 0
+            ? "entrance"
+            : x === 7
+              ? "objective"
+              : x === 8
+                ? "exit"
+                : x === 3
+                  ? "wall"
+                  : "floor",
+      })),
+      character: { ...run.character, class: "ranger" },
+      enemies: [],
+    };
+    const scouted = act(createSnapshot(scoutDefinition), { type: "scout", direction: "east" });
+    if (!scouted.accepted || scouted.event.type !== "scout") {
+      throw new Error("Expected Scout to be accepted.");
+    }
+    expect(scouted.event.revealed).toContainEqual({ x: 3, y: 0 });
+    expect(scouted.event.revealed).not.toContainEqual({ x: 4, y: 0 });
+
+    const shotDefinition: RunDefinition = {
+      ...run,
+      board: { width: 4, height: 2 },
+      character: { ...run.character, position: { x: 1, y: 0 }, class: "ranger", accuracy: 20 },
+      enemies: [{ ...run.enemies[0], position: { x: 2, y: 0 }, health: 8, maxHealth: 8 }],
+    };
+    const shot = act(createSnapshot(shotDefinition), {
+      type: "disengaging-shot",
+      targetId: "goblin",
+    });
+    if (!shot.accepted || shot.event.type !== "disengaging-shot") {
+      throw new Error("Expected Disengaging Shot to be accepted.");
+    }
+    expect(shot.event.cost).toBe(3);
+    expect(shot.snapshot.character.position).toEqual({ x: 0, y: 0 });
+    expect(replayEvents(withTilesForBoard(shotDefinition), shot.snapshot.events)).toEqual({
+      accepted: true,
+      snapshot: shot.snapshot,
+    });
+  });
+
+  test("implements reliable Arcanist Arc Bolt and turn-bounded Ward", () => {
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 5, height: 1 },
+      tiles: [
+        { position: { x: 0, y: 0 }, terrain: "entrance" },
+        { position: { x: 1, y: 0 }, terrain: "floor" },
+        { position: { x: 2, y: 0 }, terrain: "objective" },
+        { position: { x: 3, y: 0 }, terrain: "floor" },
+        { position: { x: 4, y: 0 }, terrain: "exit" },
+      ],
+      character: { ...run.character, class: "arcanist", focus: 4 },
+      enemies: [{ ...run.enemies[0], position: { x: 3, y: 0 }, focus: 1, health: 9, maxHealth: 9 }],
+    };
+    const warded = act(createSnapshot(definition), { type: "ward" });
+    if (!warded.accepted || warded.event.type !== "ward")
+      throw new Error("Expected Ward to be accepted.");
+    expect(warded.snapshot.character.ward).toBe(6);
+    const bolt = act(warded.snapshot, { type: "arc-bolt", targetId: "goblin" });
+    if (!bolt.accepted || bolt.event.type !== "arc-bolt")
+      throw new Error("Expected Arc Bolt to be accepted.");
+    expect(bolt.event.damage).toBe(5);
+    expect(bolt.snapshot.enemies[0]?.health).toBe(4);
+    expect(replayEvents(definition, bolt.snapshot.events)).toEqual({
+      accepted: true,
+      snapshot: bolt.snapshot,
+    });
+  });
+
+  test("keeps the mandatory entrance, objective, and exit route solvable for every class", () => {
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 4, height: 1 },
+      tiles: [
+        { position: { x: 0, y: 0 }, terrain: "entrance" },
+        { position: { x: 1, y: 0 }, terrain: "floor", door: "closed" },
+        { position: { x: 2, y: 0 }, terrain: "objective" },
+        { position: { x: 3, y: 0 }, terrain: "exit" },
+      ],
+      enemies: [],
+    };
+    const solvability = evaluateMandatoryObjectiveSolvability(definition);
+    expect(solvability.solvable).toBe(true);
+    expect(solvability.paths).toEqual([
+      {
+        characterClass: "vanguard",
+        positions: [
+          { x: 0, y: 0 },
+          { x: 1, y: 0 },
+          { x: 2, y: 0 },
+          { x: 3, y: 0 },
+        ],
+      },
+      {
+        characterClass: "ranger",
+        positions: [
+          { x: 0, y: 0 },
+          { x: 1, y: 0 },
+          { x: 2, y: 0 },
+          { x: 3, y: 0 },
+        ],
+      },
+      {
+        characterClass: "arcanist",
+        positions: [
+          { x: 0, y: 0 },
+          { x: 1, y: 0 },
+          { x: 2, y: 0 },
+          { x: 3, y: 0 },
+        ],
+      },
+    ]);
+
+    for (const characterClass of ["vanguard", "ranger", "arcanist"] as const) {
+      const classDefinition: RunDefinition = {
+        ...definition,
+        character: { ...definition.character, class: characterClass },
+      };
+      const completed = replay(classDefinition, [
+        { type: "open-door", target: { x: 1, y: 0 } },
+        { type: "move", direction: "east" },
+        { type: "interact", target: { x: 2, y: 0 } },
+        { type: "move", direction: "east" },
+        { type: "end-turn" },
+        { type: "interact", target: { x: 3, y: 0 } },
+      ]);
+      expect(completed).toMatchObject({
+        accepted: true,
+        snapshot: { objectiveCollected: true, exitUnlocked: true },
+      });
+    }
+
+    const blocked: RunDefinition = {
+      ...definition,
+      tiles: definition.tiles.map((tile) =>
+        tile.position.x === 1 ? { ...tile, terrain: "wall" as const, door: undefined } : tile,
+      ),
+    };
+    expect(evaluateMandatoryObjectiveSolvability(blocked)).toEqual({ solvable: false, paths: [] });
   });
 
   test("keeps terrain remembered while hiding entities and terrain behind a wall", () => {

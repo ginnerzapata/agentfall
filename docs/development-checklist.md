@@ -88,26 +88,26 @@ The commands must pass from a clean checkout without undocumented manual setup.
 - [x] Allow movement before and after other Actions in one turn.
 - [x] Convert up to two unused AP into temporary Defense when ending a turn.
 - [x] Implement seeded d20 attack resolution and small damage dice.
-- [ ] Expose hit probability and damage range without exposing future rolls.
-- [ ] Implement permanent death at zero Health.
-- [ ] Implement the rare automatic one-use resurrection effect.
-- [ ] Implement spatial retreat and deterministic enemy pursuit.
-- [ ] Implement deterministic enemy behavior trees with seeded tie resolution.
+- [x] Expose hit probability and damage range without exposing future rolls.
+- [x] Implement permanent death at zero Health.
+- [x] Implement the rare automatic one-use resurrection effect.
+- [x] Implement spatial retreat and deterministic enemy pursuit.
+- [x] Implement deterministic enemy behavior trees with seeded tie resolution.
 
 ### Class capabilities
 
-- [ ] Vanguard: Guard.
-- [ ] Vanguard: Shove, including wall or hazard collision behavior.
-- [ ] Ranger: Scout without seeing through walls.
-- [ ] Ranger: Disengaging Shot.
-- [ ] Arcanist: Arc Bolt.
-- [ ] Arcanist: Ward.
-- [ ] Confirm every mandatory floor objective remains solvable by every class.
+- [x] Vanguard: Guard.
+- [x] Vanguard: Shove, including wall or hazard collision behavior.
+- [x] Ranger: Scout without seeing through walls.
+- [x] Ranger: Disengaging Shot.
+- [x] Arcanist: Arc Bolt.
+- [x] Arcanist: Ward.
+- [x] Confirm every mandatory floor objective remains solvable by every class.
 
 ### Combat exit check
 
-- [ ] Golden combat fixtures cover hits, misses, damage, death, resurrection, retreat, and each signature ability.
-- [ ] Each class produces meaningfully different Action choices in simulations.
+- [x] Golden combat fixtures cover hits, misses, damage, death, resurrection, retreat, and each signature ability.
+- [x] Each class produces meaningfully different Action choices in simulations.
 
 ## 5. Inventory, Recovery, and Progression
 

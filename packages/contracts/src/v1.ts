@@ -1,6 +1,6 @@
 // These versions describe serialized values, not the contracts package version.
-export const SNAPSHOT_SCHEMA_VERSION = 5;
-export const ENGINE_EVENT_SCHEMA_VERSION = 5;
+export const SNAPSHOT_SCHEMA_VERSION = 8;
+export const ENGINE_EVENT_SCHEMA_VERSION = 8;
 export const ACTION_POINT_LIMIT = 4;
 export const MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS = 2;
 export const D20_SIDES = 20;
@@ -13,6 +13,16 @@ export const ACTION_POINT_COST = {
   openDoor: 1,
   closeDoor: 1,
 } as const;
+export const ABILITY_ACTION_POINT_COST = {
+  guard: 2,
+  shove: 2,
+  scout: 2,
+  disengagingShot: 3,
+  arcBolt: 2,
+  ward: 2,
+} as const;
+export const ARC_BOLT_RANGE = 4;
+export const SCOUT_RANGE = 8;
 
 export function canonicalStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -66,18 +76,48 @@ export type CombatantStats = {
   focus: number;
 };
 
+export type CharacterClass = "vanguard" | "ranger" | "arcanist";
+
+/**
+ * A class-neutral route through the required floor sequence. Closed doors are
+ * traversable because opening them is a universal Action; walls are not.
+ */
+export type MandatoryObjectivePath = {
+  characterClass: CharacterClass;
+  positions: Position[];
+};
+
+/** Static reachability evidence used when accepting authored floor content. */
+export type MandatoryObjectiveSolvability = {
+  solvable: boolean;
+  paths: MandatoryObjectivePath[];
+};
+
 export type CharacterDefinition = CombatantStats & {
   position: Position;
+  class?: CharacterClass;
+  /** A rare item that automatically prevents one otherwise lethal event. */
+  resurrectionCharges?: 0 | 1;
 };
 
 /** Defense granted for the interval between ending a turn and the next accepted Action. */
 export type CharacterState = CharacterDefinition & {
   temporaryDefense: number;
+  resurrectionCharges: 0 | 1;
+  dead: boolean;
+  guardedTiles: Position[];
+  guardExpiresTurn: number;
+  ward: number;
+  wardExpiresTurn: number;
 };
+
+/** A small, content-selected behavior tree evaluated at the end of each player turn. */
+export type EnemyBehavior = "pursue" | "skirmish" | "hold";
 
 export type EnemyState = CombatantStats & {
   id: string;
   position: Position;
+  behavior?: EnemyBehavior;
 };
 
 export type FloorObjectDefinition =
@@ -106,6 +146,12 @@ export type Action =
   | { type: "interact"; target: Position }
   | { type: "open-door"; target: Position }
   | { type: "close-door"; target: Position }
+  | { type: "guard" }
+  | { type: "shove"; targetId: string }
+  | { type: "scout"; direction: Direction }
+  | { type: "disengaging-shot"; targetId: string }
+  | { type: "arc-bolt"; targetId: string }
+  | { type: "ward" }
   | { type: "end-turn" };
 
 export type EngineEvent = {
@@ -117,7 +163,7 @@ export type EngineEvent = {
       from: Position;
       to: Position;
       cost: 1;
-      triggeredTrap?: { id: string; damage: number };
+      triggeredTrap?: { id: string; damage: number; outcome: CharacterDamageOutcome };
     }
   | { type: "attack"; targetId: string; roll: number; damage: number; cost: 2 }
   | { type: "interact"; target: Position; interaction: "objective" | "exit"; cost: 1 }
@@ -125,8 +171,39 @@ export type EngineEvent = {
   | { type: "pickup-item"; target: Position; objectId: string; itemId: string; cost: 1 }
   | { type: "use-sanctuary"; target: Position; objectId: string; healing: number; cost: 1 }
   | { type: "open-door" | "close-door"; target: Position; cost: 1 }
-  | { type: "end-turn"; temporaryDefense: number }
+  | { type: "guard"; protectedTiles: Position[]; expiresTurn: number; cost: 2 }
+  | {
+      type: "shove";
+      targetId: string;
+      to?: Position;
+      damage: number;
+      triggeredTrap?: { id: string; damage: number };
+      cost: 2;
+    }
+  | { type: "scout"; direction: Direction; revealed: Position[]; cost: 2 }
+  | {
+      type: "disengaging-shot";
+      targetId: string;
+      roll: number;
+      damage: number;
+      to: Position;
+      cost: 3;
+    }
+  | { type: "arc-bolt"; targetId: string; damage: number; cost: 2 }
+  | { type: "ward"; protection: number; expiresTurn: number; cost: 2 }
+  | {
+      type: "end-turn";
+      temporaryDefense: number;
+      enemyMoves: Array<{ enemyId: string; from: Position; to: Position }>;
+    }
 );
+
+/** The irreversible result of a damaging event, stored for replay. */
+export type CharacterDamageOutcome = {
+  health: number;
+  died: boolean;
+  resurrected: boolean;
+};
 
 export type Snapshot = {
   schemaVersion: typeof SNAPSHOT_SCHEMA_VERSION;
@@ -155,6 +232,12 @@ export type LegalAction =
   | { type: "interact"; targets: Position[] }
   | { type: "open-door"; targets: Position[] }
   | { type: "close-door"; targets: Position[] }
+  | { type: "guard" }
+  | { type: "shove"; targetIds: string[] }
+  | { type: "scout"; directions: Direction[] }
+  | { type: "disengaging-shot"; targetIds: string[] }
+  | { type: "arc-bolt"; targetIds: string[] }
+  | { type: "ward" }
   | { type: "end-turn" };
 
 export type ObservedTile = FloorTile & { visibility: "visible" | "remembered" };
@@ -168,14 +251,25 @@ export type Observation = {
   objects: ObservedFloorObject[];
   tiles: ObservedTile[];
   ascii: string;
+  inCombat: boolean;
+  attackPreviews: AttackPreview[];
   legalActions: LegalAction[];
+};
+
+/** Public odds calculated from visible statistics; it never contains a future RNG result. */
+export type AttackPreview = {
+  targetId: string;
+  hitProbability: number;
+  damageRange: { minimum: number; maximum: number };
 };
 
 export type ActionRejectionReason =
   | "insufficient-action-points"
   | "blocked-destination"
   | "invalid-target"
-  | "invalid-interaction";
+  | "invalid-interaction"
+  | "invalid-ability"
+  | "character-dead";
 
 export type RunDefinitionRejectionReason =
   | "invalid-board-dimensions"

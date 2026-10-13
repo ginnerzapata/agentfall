@@ -3,13 +3,18 @@ import type {
   Action,
   ActionRejectionReason,
   ActionResult,
+  CharacterClass,
+  CharacterDamageOutcome,
   CharacterState,
   CombatantStats,
   CreateRunResult,
   Direction,
+  EnemyBehavior,
   EngineEvent,
   FloorObjectState,
   FloorTile,
+  MandatoryObjectivePath,
+  MandatoryObjectiveSolvability,
   Observation,
   Position,
   RecordedEventReplayRejection,
@@ -22,14 +27,17 @@ import type {
   Snapshot,
 } from "@agentfall/contracts";
 import {
+  ABILITY_ACTION_POINT_COST,
   ACTION_POINT_COST,
   ACTION_POINT_LIMIT,
+  ARC_BOLT_RANGE,
   BASIC_ATTACK_DAMAGE_DIE_SIDES,
   BASIC_ATTACK_HIT_DIFFICULTY,
   canonicalStringify,
   D20_SIDES,
   ENGINE_EVENT_SCHEMA_VERSION,
   MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS,
+  SCOUT_RANGE,
   SNAPSHOT_SCHEMA_VERSION,
 } from "@agentfall/contracts";
 
@@ -39,15 +47,20 @@ export type {
   Action,
   ActionRejectionReason,
   ActionResult,
-  CharacterState,
+  CharacterClass,
+  CharacterDamageOutcome,
   CharacterDefinition,
+  CharacterState,
   CombatantStats,
   CreateRunResult,
   Direction,
-  EngineEvent,
+  EnemyBehavior,
   EnemyState,
+  EngineEvent,
   FloorObjectState,
   FloorTile,
+  MandatoryObjectivePath,
+  MandatoryObjectiveSolvability,
   Observation,
   Position,
   RecordedEventReplayRejection,
@@ -61,12 +74,15 @@ export type {
 } from "@agentfall/contracts";
 
 export {
+  ABILITY_ACTION_POINT_COST,
   ACTION_POINT_COST,
   ACTION_POINT_LIMIT,
+  ARC_BOLT_RANGE,
   BASIC_ATTACK_DAMAGE_DIE_SIDES,
   BASIC_ATTACK_HIT_DIFFICULTY,
   D20_SIDES,
   MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS,
+  SCOUT_RANGE,
 } from "@agentfall/contracts";
 
 export function createRun(definition: RunDefinition): CreateRunResult {
@@ -90,7 +106,16 @@ export function createRun(definition: RunDefinition): CreateRunResult {
     inventory: [],
     turn: 1,
     actionPoints: ACTION_POINT_LIMIT,
-    character: { ...clone(definition.character), temporaryDefense: 0 },
+    character: {
+      ...clone(definition.character),
+      resurrectionCharges: definition.character.resurrectionCharges ?? 0,
+      temporaryDefense: 0,
+      dead: false,
+      guardedTiles: [],
+      guardExpiresTurn: 0,
+      ward: 0,
+      wardExpiresTurn: 0,
+    },
     enemies: clone(definition.enemies).sort(compareEnemies),
     events: [],
   };
@@ -99,7 +124,33 @@ export function createRun(definition: RunDefinition): CreateRunResult {
   return { accepted: true, snapshot: withChecksum(snapshot) };
 }
 
+/**
+ * Checks the mandatory entrance -> objective -> exit route for every class.
+ * Class abilities are deliberately excluded: a required route must use only
+ * universal movement, door, and interaction rules.
+ */
+export function evaluateMandatoryObjectiveSolvability(
+  definition: RunDefinition,
+): MandatoryObjectiveSolvability {
+  const classes: CharacterClass[] = ["vanguard", "ranger", "arcanist"];
+  const entrance = definition.tiles.find((tile) => tile.terrain === "entrance")?.position;
+  const objective = definition.tiles.find((tile) => tile.terrain === "objective")?.position;
+  const exit = definition.tiles.find((tile) => tile.terrain === "exit")?.position;
+  if (!entrance || !objective || !exit) return { solvable: false, paths: [] };
+
+  const toObjective = mandatoryRoute(definition, entrance, objective);
+  const toExit = mandatoryRoute(definition, objective, exit);
+  if (!toObjective || !toExit) return { solvable: false, paths: [] };
+  const positions = [...toObjective, ...toExit.slice(1)];
+  const paths: MandatoryObjectivePath[] = classes.map((characterClass) => ({
+    characterClass,
+    positions: clone(positions),
+  }));
+  return { solvable: true, paths };
+}
+
 export function act(snapshot: Snapshot, action: Action): ActionResult {
+  if (snapshot.character.dead) return reject("character-dead");
   switch (action.type) {
     case "move":
       return move(snapshot, action.direction);
@@ -111,6 +162,18 @@ export function act(snapshot: Snapshot, action: Action): ActionResult {
       return changeDoor(snapshot, action.target, "open");
     case "close-door":
       return changeDoor(snapshot, action.target, "closed");
+    case "guard":
+      return guard(snapshot);
+    case "shove":
+      return shove(snapshot, action.targetId);
+    case "scout":
+      return scout(snapshot, action.direction);
+    case "disengaging-shot":
+      return disengagingShot(snapshot, action.targetId);
+    case "arc-bolt":
+      return arcBolt(snapshot, action.targetId);
+    case "ward":
+      return ward(snapshot);
     case "end-turn":
       return endTurn(snapshot);
   }
@@ -156,6 +219,43 @@ export function observe(snapshot: Snapshot): Observation {
   if (snapshot.actionPoints >= 1 && closeDoors.length > 0) {
     legalActions.push({ type: "close-door", targets: closeDoors });
   }
+  const characterClass = snapshot.character.class;
+  const adjacentEnemies = targets;
+  if (characterClass === "vanguard" && snapshot.actionPoints >= ABILITY_ACTION_POINT_COST.guard) {
+    legalActions.push({ type: "guard" });
+  }
+  if (
+    characterClass === "vanguard" &&
+    snapshot.actionPoints >= ABILITY_ACTION_POINT_COST.shove &&
+    adjacentEnemies.length > 0
+  ) {
+    legalActions.push({ type: "shove", targetIds: adjacentEnemies });
+  }
+  if (characterClass === "ranger" && snapshot.actionPoints >= ABILITY_ACTION_POINT_COST.scout) {
+    legalActions.push({
+      type: "scout",
+      directions: directionEntries().map(({ direction }) => direction),
+    });
+  }
+  if (
+    characterClass === "ranger" &&
+    snapshot.actionPoints >= ABILITY_ACTION_POINT_COST.disengagingShot
+  ) {
+    const disengagingTargets = adjacentEnemies.filter((targetId) => {
+      const target = adjacentLivingEnemy(snapshot, targetId);
+      return target !== undefined && disengageDestination(snapshot, target) !== undefined;
+    });
+    if (disengagingTargets.length > 0)
+      legalActions.push({ type: "disengaging-shot", targetIds: disengagingTargets });
+  }
+  if (characterClass === "arcanist" && snapshot.actionPoints >= ABILITY_ACTION_POINT_COST.arcBolt) {
+    const arcBoltTargets = visibleArcBoltTargets(snapshot);
+    if (arcBoltTargets.length > 0)
+      legalActions.push({ type: "arc-bolt", targetIds: arcBoltTargets });
+  }
+  if (characterClass === "arcanist" && snapshot.actionPoints >= ABILITY_ACTION_POINT_COST.ward) {
+    legalActions.push({ type: "ward" });
+  }
   legalActions.push({ type: "end-turn" });
 
   return {
@@ -170,6 +270,8 @@ export function observe(snapshot: Snapshot): Observation {
       .map(({ used: _used, ...object }) => clone(object)),
     tiles: observedTiles(snapshot),
     ascii: renderAscii(snapshot),
+    inCombat: isInCombat(snapshot),
+    attackPreviews: targets.map((targetId) => attackPreview(snapshot, targetId)),
     legalActions,
   };
 }
@@ -220,7 +322,15 @@ function move(snapshot: Snapshot, direction: Direction): ActionResult {
     from: clone(snapshot.character.position),
     to,
     cost: ACTION_POINT_COST.move,
-    ...(trap ? { triggeredTrap: { id: trap.id, damage: trap.damage } } : {}),
+    ...(trap
+      ? {
+          triggeredTrap: {
+            id: trap.id,
+            damage: trap.damage,
+            outcome: characterDamageOutcome(snapshot.character, trap.damage),
+          },
+        }
+      : {}),
   };
   return applyEvent(snapshot, event, (next) => {
     next.character.position = to;
@@ -229,7 +339,7 @@ function move(snapshot: Snapshot, direction: Direction): ActionResult {
       const nextTrap = objectAt(next, to, "trap");
       if (!nextTrap) throw new Error("Trap disappeared during resolution.");
       nextTrap.used = true;
-      next.character.health = Math.max(0, next.character.health - event.triggeredTrap.damage);
+      applyCharacterDamageOutcome(next.character, event.triggeredTrap.outcome);
     }
   });
 }
@@ -268,17 +378,171 @@ function attack(snapshot: Snapshot, targetId: string): ActionResult {
   });
 }
 
+function guard(snapshot: Snapshot): ActionResult {
+  const rejection = rejectForAbility(snapshot, "vanguard", ABILITY_ACTION_POINT_COST.guard);
+  if (rejection) return rejection;
+  const event: Extract<EngineEvent, { type: "guard" }> = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "guard",
+    protectedTiles: adjacentPositions(snapshot.character.position).filter((position) =>
+      isInBounds(position, snapshot.board),
+    ),
+    expiresTurn: snapshot.turn + 1,
+    cost: ABILITY_ACTION_POINT_COST.guard,
+  };
+  return applyEvent(snapshot, event, (next) => {
+    next.character.guardedTiles = clone(event.protectedTiles);
+    next.character.guardExpiresTurn = event.expiresTurn;
+    next.actionPoints -= event.cost;
+  });
+}
+
+function shove(snapshot: Snapshot, targetId: string): ActionResult {
+  const rejection = rejectForAbility(snapshot, "vanguard", ABILITY_ACTION_POINT_COST.shove);
+  if (rejection) return rejection;
+  const target = adjacentLivingEnemy(snapshot, targetId);
+  if (!target) return reject("invalid-target");
+  const to = add(target.position, subtract(target.position, snapshot.character.position));
+  const canMove = canEnemyEnter(snapshot, to, target.id);
+  const trap = canMove ? objectAt(snapshot, to, "trap") : undefined;
+  const event: Extract<EngineEvent, { type: "shove" }> = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "shove",
+    targetId,
+    ...(canMove ? { to } : {}),
+    damage: canMove ? (trap?.damage ?? 0) : 1 + snapshot.character.power,
+    ...(trap ? { triggeredTrap: { id: trap.id, damage: trap.damage } } : {}),
+    cost: ABILITY_ACTION_POINT_COST.shove,
+  };
+  return applyEvent(snapshot, event, (next) => {
+    const nextTarget = next.enemies.find((enemy) => enemy.id === event.targetId);
+    if (!nextTarget) throw new Error("Shove target disappeared during resolution.");
+    if (event.to) nextTarget.position = clone(event.to);
+    nextTarget.health = Math.max(0, nextTarget.health - event.damage);
+    if (event.triggeredTrap) {
+      const nextTrap = objectAt(next, event.to as Position, "trap");
+      if (!nextTrap) throw new Error("Shove trap disappeared during resolution.");
+      nextTrap.used = true;
+    }
+    next.actionPoints -= event.cost;
+  });
+}
+
+function scout(snapshot: Snapshot, direction: Direction): ActionResult {
+  const rejection = rejectForAbility(snapshot, "ranger", ABILITY_ACTION_POINT_COST.scout);
+  if (rejection) return rejection;
+  const event: Extract<EngineEvent, { type: "scout" }> = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "scout",
+    direction,
+    revealed: scoutPositions(snapshot, direction),
+    cost: ABILITY_ACTION_POINT_COST.scout,
+  };
+  return applyEvent(snapshot, event, (next) => {
+    const remembered = new Map(
+      next.rememberedTiles.map((tile) => [positionKey(tile.position), tile]),
+    );
+    for (const position of event.revealed) {
+      const tile = tileAt(next, position);
+      if (tile) remembered.set(positionKey(position), clone(tile));
+    }
+    next.rememberedTiles = [...remembered.values()].sort(compareTiles);
+    next.actionPoints -= event.cost;
+  });
+}
+
+function disengagingShot(snapshot: Snapshot, targetId: string): ActionResult {
+  const rejection = rejectForAbility(snapshot, "ranger", ABILITY_ACTION_POINT_COST.disengagingShot);
+  if (rejection) return rejection;
+  const target = adjacentLivingEnemy(snapshot, targetId);
+  const to = target ? disengageDestination(snapshot, target) : undefined;
+  if (!target || !to) return reject("invalid-target");
+  const eventIndex = snapshot.events.length;
+  const roll = rollDie(snapshot, eventIndex, `disengaging-shot:${targetId}:hit`, D20_SIDES);
+  const damage =
+    roll + snapshot.character.accuracy >= BASIC_ATTACK_HIT_DIFFICULTY + target.defense
+      ? rollDie(
+          snapshot,
+          eventIndex,
+          `disengaging-shot:${targetId}:damage`,
+          BASIC_ATTACK_DAMAGE_DIE_SIDES,
+        ) + snapshot.character.power
+      : 0;
+  const event: Extract<EngineEvent, { type: "disengaging-shot" }> = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "disengaging-shot",
+    targetId,
+    roll,
+    damage,
+    to,
+    cost: ABILITY_ACTION_POINT_COST.disengagingShot,
+  };
+  return applyEvent(snapshot, event, (next) => {
+    const nextTarget = next.enemies.find((enemy) => enemy.id === event.targetId);
+    if (!nextTarget) throw new Error("Disengaging Shot target disappeared during resolution.");
+    nextTarget.health = Math.max(0, nextTarget.health - event.damage);
+    next.character.position = clone(event.to);
+    next.actionPoints -= event.cost;
+  });
+}
+
+function arcBolt(snapshot: Snapshot, targetId: string): ActionResult {
+  const rejection = rejectForAbility(snapshot, "arcanist", ABILITY_ACTION_POINT_COST.arcBolt);
+  if (rejection) return rejection;
+  const target = snapshot.enemies.find((enemy) => enemy.id === targetId && enemy.health > 0);
+  if (!target || !visibleArcBoltTargets(snapshot).includes(targetId))
+    return reject("invalid-target");
+  const event: Extract<EngineEvent, { type: "arc-bolt" }> = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "arc-bolt",
+    targetId,
+    damage: Math.max(1, 2 + snapshot.character.focus - target.focus),
+    cost: ABILITY_ACTION_POINT_COST.arcBolt,
+  };
+  return applyEvent(snapshot, event, (next) => {
+    const nextTarget = next.enemies.find((enemy) => enemy.id === event.targetId);
+    if (!nextTarget) throw new Error("Arc Bolt target disappeared during resolution.");
+    nextTarget.health = Math.max(0, nextTarget.health - event.damage);
+    next.actionPoints -= event.cost;
+  });
+}
+
+function ward(snapshot: Snapshot): ActionResult {
+  const rejection = rejectForAbility(snapshot, "arcanist", ABILITY_ACTION_POINT_COST.ward);
+  if (rejection) return rejection;
+  const event: Extract<EngineEvent, { type: "ward" }> = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "ward",
+    protection: snapshot.character.focus + 2,
+    expiresTurn: snapshot.turn + 1,
+    cost: ABILITY_ACTION_POINT_COST.ward,
+  };
+  return applyEvent(snapshot, event, (next) => {
+    next.character.ward = event.protection;
+    next.character.wardExpiresTurn = event.expiresTurn;
+    next.actionPoints -= event.cost;
+  });
+}
+
 function endTurn(snapshot: Snapshot): ActionResult {
   const temporaryDefense = temporaryDefenseFromUnusedActionPoints(snapshot.actionPoints);
   const event: EngineEvent = {
     schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
     type: "end-turn",
     temporaryDefense,
+    enemyMoves: enemyBehaviorMoves(snapshot),
   };
   return applyEvent(snapshot, event, (next) => {
     next.turn += 1;
     next.actionPoints = ACTION_POINT_LIMIT;
     next.character.temporaryDefense = event.temporaryDefense;
+    if (next.turn > next.character.guardExpiresTurn) next.character.guardedTiles = [];
+    if (next.turn > next.character.wardExpiresTurn) next.character.ward = 0;
+    for (const move of event.enemyMoves) {
+      const enemy = next.enemies.find((candidate) => candidate.id === move.enemyId);
+      if (!enemy) throw new Error("Enemy disappeared during pursuit.");
+      enemy.position = clone(move.to);
+    }
   });
 }
 
@@ -447,7 +711,7 @@ function applyRecordedEvent(
             const trap = objectAt(next, event.to, "trap");
             if (!trap) throw new Error("Recorded trap disappeared during replay.");
             trap.used = true;
-            next.character.health = Math.max(0, next.character.health - event.triggeredTrap.damage);
+            applyCharacterDamageOutcome(next.character, event.triggeredTrap.outcome);
           }
         }).snapshot,
       };
@@ -476,9 +740,34 @@ function applyRecordedEvent(
         }).snapshot,
       };
     }
+    case "guard":
+      return replayAbilityEvent(snapshot, eventIndex, event, { type: "guard" });
+    case "shove":
+      return replayAbilityEvent(snapshot, eventIndex, event, {
+        type: "shove",
+        targetId: event.targetId,
+      });
+    case "scout":
+      return replayAbilityEvent(snapshot, eventIndex, event, {
+        type: "scout",
+        direction: event.direction,
+      });
+    case "disengaging-shot":
+      return replayAbilityEvent(snapshot, eventIndex, event, {
+        type: "disengaging-shot",
+        targetId: event.targetId,
+      });
+    case "arc-bolt":
+      return replayAbilityEvent(snapshot, eventIndex, event, {
+        type: "arc-bolt",
+        targetId: event.targetId,
+      });
+    case "ward":
+      return replayAbilityEvent(snapshot, eventIndex, event, { type: "ward" });
     case "end-turn":
       if (
-        event.temporaryDefense !== temporaryDefenseFromUnusedActionPoints(snapshot.actionPoints)
+        event.temporaryDefense !== temporaryDefenseFromUnusedActionPoints(snapshot.actionPoints) ||
+        !sameEnemyMoves(event.enemyMoves, enemyBehaviorMoves(snapshot))
       ) {
         return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
       }
@@ -488,6 +777,11 @@ function applyRecordedEvent(
           next.turn += 1;
           next.actionPoints = ACTION_POINT_LIMIT;
           next.character.temporaryDefense = event.temporaryDefense;
+          for (const move of event.enemyMoves) {
+            const enemy = next.enemies.find((candidate) => candidate.id === move.enemyId);
+            if (!enemy) throw new Error("Recorded enemy disappeared during pursuit.");
+            enemy.position = clone(move.to);
+          }
         }).snapshot,
       };
     case "interact":
@@ -583,6 +877,25 @@ function applyRecordedEvent(
   }
 }
 
+function replayAbilityEvent(
+  snapshot: Snapshot,
+  eventIndex: number,
+  event: Extract<
+    EngineEvent,
+    { type: "guard" | "shove" | "scout" | "disengaging-shot" | "arc-bolt" | "ward" }
+  >,
+  action: Extract<
+    Action,
+    { type: "guard" | "shove" | "scout" | "disengaging-shot" | "arc-bolt" | "ward" }
+  >,
+): { accepted: true; snapshot: Snapshot } | RecordedEventReplayRejection {
+  const result = act(snapshot, action);
+  if (!result.accepted || canonicalStringify(result.event) !== canonicalStringify(event)) {
+    return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
+  }
+  return { accepted: true, snapshot: result.snapshot };
+}
+
 function applyEvent(
   snapshot: Snapshot,
   event: EngineEvent,
@@ -626,6 +939,80 @@ function rejectForInsufficientActionPoints(
   return snapshot.actionPoints < cost ? reject("insufficient-action-points") : undefined;
 }
 
+function rejectForAbility(
+  snapshot: Snapshot,
+  characterClass: CharacterClass,
+  cost: number,
+): RejectedActionResult | undefined {
+  if (snapshot.character.class !== characterClass) return reject("invalid-ability");
+  return rejectForInsufficientActionPoints(snapshot, cost);
+}
+
+function adjacentLivingEnemy(
+  snapshot: Snapshot,
+  targetId: string,
+): Snapshot["enemies"][number] | undefined {
+  return snapshot.enemies.find(
+    (enemy) =>
+      enemy.id === targetId &&
+      enemy.health > 0 &&
+      isAdjacent(snapshot.character.position, enemy.position),
+  );
+}
+
+function canEnemyEnter(snapshot: Snapshot, position: Position, movingEnemyId: string): boolean {
+  return (
+    isInBounds(position, snapshot.board) &&
+    isWalkable(tileAt(snapshot, position)) &&
+    !samePosition(position, snapshot.character.position) &&
+    !snapshot.enemies.some(
+      (enemy) =>
+        enemy.id !== movingEnemyId && enemy.health > 0 && samePosition(enemy.position, position),
+    )
+  );
+}
+
+function disengageDestination(
+  snapshot: Snapshot,
+  target: Snapshot["enemies"][number],
+): Position | undefined {
+  const destination = subtract(
+    snapshot.character.position,
+    subtract(target.position, snapshot.character.position),
+  );
+  return canEnter(snapshot, destination) ? destination : undefined;
+}
+
+function visibleArcBoltTargets(snapshot: Snapshot): string[] {
+  return snapshot.enemies
+    .filter(
+      (enemy) =>
+        enemy.health > 0 &&
+        manhattan(snapshot.character.position, enemy.position) <= ARC_BOLT_RANGE &&
+        hasLineOfSight(snapshot, snapshot.character.position, enemy.position),
+    )
+    .map((enemy) => enemy.id);
+}
+
+function scoutPositions(snapshot: Snapshot, direction: Direction): Position[] {
+  const delta = directionEntries().find((entry) => entry.direction === direction)?.delta;
+  if (!delta) throw new Error(`Unknown scout direction: ${direction}`);
+  return snapshot.tiles
+    .filter((tile) => {
+      const offset = subtract(tile.position, snapshot.character.position);
+      const forward = offset.x * delta.x + offset.y * delta.y;
+      const lateral = Math.abs(offset.x * delta.y - offset.y * delta.x);
+      return (
+        forward > 0 &&
+        forward * forward + lateral * lateral <= SCOUT_RANGE * SCOUT_RANGE &&
+        lateral <= forward &&
+        hasLineOfSight(snapshot, snapshot.character.position, tile.position)
+      );
+    })
+    .map((tile) => clone(tile.position))
+    .sort(comparePositions);
+}
+
 function reject(reason: ActionRejectionReason): RejectedActionResult {
   return { accepted: false, reason };
 }
@@ -641,7 +1028,14 @@ function validateRunDefinition(definition: RunDefinition): RejectedCreateRunResu
   if (!isPositiveInteger(definition.board.width) || !isPositiveInteger(definition.board.height)) {
     return rejectRunDefinition("invalid-board-dimensions");
   }
-  if (!hasValidCombatantStats(definition.character)) {
+  if (
+    !hasValidCombatantStats(definition.character) ||
+    (definition.character.class !== undefined &&
+      !["vanguard", "ranger", "arcanist"].includes(definition.character.class)) ||
+    (definition.character.resurrectionCharges !== undefined &&
+      definition.character.resurrectionCharges !== 0 &&
+      definition.character.resurrectionCharges !== 1)
+  ) {
     return rejectRunDefinition("invalid-character-stats");
   }
   if (!isNonEmptyString(definition.rulesetVersion)) {
@@ -662,6 +1056,14 @@ function validateRunDefinition(definition: RunDefinition): RejectedCreateRunResu
   const occupiedPositions = new Set([positionKey(definition.character.position)]);
   for (const enemy of definition.enemies) {
     if (!hasValidCombatantStats(enemy)) {
+      return rejectRunDefinition("invalid-enemy-stats");
+    }
+    if (
+      enemy.behavior !== undefined &&
+      enemy.behavior !== "pursue" &&
+      enemy.behavior !== "skirmish" &&
+      enemy.behavior !== "hold"
+    ) {
       return rejectRunDefinition("invalid-enemy-stats");
     }
     if (entityIds.has(enemy.id)) return rejectRunDefinition("duplicate-entity-id");
@@ -762,6 +1164,127 @@ function hasValidCombatantStats(stats: CombatantStats): boolean {
   );
 }
 
+function attackPreview(
+  snapshot: Snapshot,
+  targetId: string,
+): Observation["attackPreviews"][number] {
+  const target = snapshot.enemies.find((enemy) => enemy.id === targetId);
+  if (!target) throw new Error("Cannot preview an unknown target.");
+  const requiredRoll = BASIC_ATTACK_HIT_DIFFICULTY + target.defense - snapshot.character.accuracy;
+  const successfulRolls = Math.max(0, D20_SIDES - Math.max(1, requiredRoll) + 1);
+  return {
+    targetId,
+    hitProbability: successfulRolls / D20_SIDES,
+    damageRange: {
+      minimum: successfulRolls === D20_SIDES ? 1 + snapshot.character.power : 0,
+      maximum: successfulRolls === 0 ? 0 : BASIC_ATTACK_DAMAGE_DIE_SIDES + snapshot.character.power,
+    },
+  };
+}
+
+function characterDamageOutcome(character: CharacterState, damage: number): CharacterDamageOutcome {
+  const health = Math.max(0, character.health - damage);
+  if (health > 0) return { health, died: false, resurrected: false };
+  if (character.resurrectionCharges > 0) return { health: 1, died: false, resurrected: true };
+  return { health: 0, died: true, resurrected: false };
+}
+
+function applyCharacterDamageOutcome(
+  character: CharacterState,
+  outcome: CharacterDamageOutcome,
+): void {
+  character.health = outcome.health;
+  character.dead = outcome.died;
+  if (outcome.resurrected) character.resurrectionCharges = 0;
+}
+
+function enemyBehaviorMoves(
+  snapshot: Snapshot,
+): Extract<EngineEvent, { type: "end-turn" }>["enemyMoves"] {
+  const occupied = new Set(
+    snapshot.enemies
+      .filter((enemy) => enemy.health > 0)
+      .map((enemy) => positionKey(enemy.position)),
+  );
+  const moves: Extract<EngineEvent, { type: "end-turn" }>["enemyMoves"] = [];
+  for (const enemy of snapshot.enemies.filter((candidate) => candidate.health > 0)) {
+    occupied.delete(positionKey(enemy.position));
+    const destination = decideEnemyMove(snapshot, enemy, occupied);
+    if (destination) {
+      moves.push({ enemyId: enemy.id, from: clone(enemy.position), to: destination });
+      occupied.add(positionKey(destination));
+    } else {
+      occupied.add(positionKey(enemy.position));
+    }
+  }
+  return moves;
+}
+
+function decideEnemyMove(
+  snapshot: Snapshot,
+  enemy: Snapshot["enemies"][number],
+  occupied: ReadonlySet<string>,
+): Position | undefined {
+  const candidates = directionEntries()
+    .map(({ delta }) => add(enemy.position, delta))
+    .filter(
+      (position) =>
+        isInBounds(position, snapshot.board) &&
+        isWalkable(tileAt(snapshot, position)) &&
+        !samePosition(position, snapshot.character.position) &&
+        !occupied.has(positionKey(position)),
+    );
+  const behavior: EnemyBehavior = enemy.behavior ?? "pursue";
+  if (behavior === "hold") return undefined;
+
+  const currentDistance = manhattan(enemy.position, snapshot.character.position);
+  const preferred =
+    behavior === "skirmish" && currentDistance === 1
+      ? candidates.filter(
+          (position) => manhattan(position, snapshot.character.position) > currentDistance,
+        )
+      : candidates.filter(
+          (position) => manhattan(position, snapshot.character.position) < currentDistance,
+        );
+  if (preferred.length === 0) return undefined;
+
+  const bestDistance =
+    behavior === "skirmish" && currentDistance === 1
+      ? Math.max(...preferred.map((position) => manhattan(position, snapshot.character.position)))
+      : Math.min(...preferred.map((position) => manhattan(position, snapshot.character.position)));
+  const ties = preferred
+    .filter((position) => manhattan(position, snapshot.character.position) === bestDistance)
+    .sort(comparePositions);
+  return chooseSeededTie(snapshot, enemy.id, ties);
+}
+
+function chooseSeededTie(snapshot: Snapshot, enemyId: string, candidates: Position[]): Position {
+  if (candidates.length === 0) throw new Error("Cannot resolve an empty enemy behavior tie.");
+  const index =
+    candidates.length === 1
+      ? 0
+      : rollDie(
+          snapshot,
+          snapshot.events.length,
+          `enemy:${enemyId}:behavior-tie`,
+          candidates.length,
+        ) - 1;
+  return clone(candidates[index] as Position);
+}
+
+function sameEnemyMoves(
+  left: Extract<EngineEvent, { type: "end-turn" }>["enemyMoves"],
+  right: Extract<EngineEvent, { type: "end-turn" }>["enemyMoves"],
+): boolean {
+  return canonicalStringify(left) === canonicalStringify(right);
+}
+
+function isInCombat(snapshot: Snapshot): boolean {
+  return snapshot.enemies.some(
+    (enemy) => enemy.health > 0 && manhattan(enemy.position, snapshot.character.position) <= 6,
+  );
+}
+
 function isValidRecordedAttackDamage(attacker: CharacterState, damage: number): boolean {
   return (
     isNonNegativeInteger(damage) &&
@@ -784,6 +1307,45 @@ function isTerrain(value: string): value is FloorTile["terrain"] {
 
 function isWalkable(tile: FloorTile | undefined): boolean {
   return tile !== undefined && tile.terrain !== "wall" && tile.door !== "closed";
+}
+
+function mandatoryRoute(
+  definition: RunDefinition,
+  from: Position,
+  to: Position,
+): Position[] | undefined {
+  const start = positionKey(from);
+  const destination = positionKey(to);
+  const tiles = new Map(definition.tiles.map((tile) => [positionKey(tile.position), tile]));
+  const previous = new Map<string, string | undefined>([[start, undefined]]);
+  const queue = [clone(from)];
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    if (!current) continue;
+    const currentKey = positionKey(current);
+    if (currentKey === destination) {
+      const route: Position[] = [];
+      let key: string | undefined = currentKey;
+      while (key !== undefined) {
+        const tile = tiles.get(key);
+        if (!tile) throw new Error("Mandatory route references a missing tile.");
+        route.push(clone(tile.position));
+        key = previous.get(key);
+      }
+      return route.reverse();
+    }
+    for (const { delta } of directionEntries()) {
+      const next = add(current, delta);
+      const nextKey = positionKey(next);
+      const tile = tiles.get(nextKey);
+      // Every class can open a door before entering it.
+      if (!tile || tile.terrain === "wall" || previous.has(nextKey)) continue;
+      previous.set(nextKey, currentKey);
+      queue.push(next);
+    }
+  }
+  return undefined;
 }
 
 function tileAt(snapshot: Pick<Snapshot, "tiles">, position: Position): FloorTile | undefined {
@@ -831,7 +1393,9 @@ function isValidRecordedTrap(
     (event.triggeredTrap !== undefined &&
       trap !== undefined &&
       trap.id === event.triggeredTrap.id &&
-      trap.damage === event.triggeredTrap.damage)
+      trap.damage === event.triggeredTrap.damage &&
+      canonicalStringify(event.triggeredTrap.outcome) ===
+        canonicalStringify(characterDamageOutcome(snapshot.character, trap.damage)))
   );
 }
 
@@ -960,6 +1524,14 @@ function isAdjacent(a: Position, b: Position): boolean {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
 }
 
+function manhattan(a: Position, b: Position): number {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+function comparePositions(left: Position, right: Position): number {
+  return left.y - right.y || left.x - right.x;
+}
+
 function samePosition(a: Position, b: Position): boolean {
   return a.x === b.x && a.y === b.y;
 }
@@ -985,6 +1557,14 @@ function compareObjects(left: { id: string }, right: { id: string }): number {
 
 function add(position: Position, delta: Position): Position {
   return { x: position.x + delta.x, y: position.y + delta.y };
+}
+
+function subtract(left: Position, right: Position): Position {
+  return { x: left.x - right.x, y: left.y - right.y };
+}
+
+function adjacentPositions(position: Position): Position[] {
+  return directionEntries().map(({ delta }) => add(position, delta));
 }
 
 function directionEntries(): Array<{ direction: Direction; delta: Position }> {
