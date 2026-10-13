@@ -5,6 +5,7 @@ import type {
   ActionResult,
   CharacterClass,
   CharacterDamageOutcome,
+  CharacterDefinition,
   CharacterState,
   CombatantStats,
   CreateRunResult,
@@ -31,6 +32,7 @@ import {
   ACTION_POINT_COST,
   ACTION_POINT_LIMIT,
   ARC_BOLT_RANGE,
+  BACKPACK_SLOT_COUNT,
   BASIC_ATTACK_DAMAGE_DIE_SIDES,
   BASIC_ATTACK_HIT_DIFFICULTY,
   canonicalStringify,
@@ -78,6 +80,7 @@ export {
   ACTION_POINT_COST,
   ACTION_POINT_LIMIT,
   ARC_BOLT_RANGE,
+  BACKPACK_SLOT_COUNT,
   BASIC_ATTACK_DAMAGE_DIE_SIDES,
   BASIC_ATTACK_HIT_DIFFICULTY,
   D20_SIDES,
@@ -103,7 +106,7 @@ export function createRun(definition: RunDefinition): CreateRunResult {
     rememberedTiles: [],
     objectiveCollected: false,
     exitUnlocked: false,
-    inventory: [],
+    inventory: createInventory(definition.character),
     turn: 1,
     actionPoints: ACTION_POINT_LIMIT,
     character: {
@@ -601,6 +604,7 @@ function useItemObject(
     | Extract<FloorObjectState, { type: "item" }>,
   type: "open-chest" | "pickup-item",
 ): ActionResult {
+  if (!hasBackpackSpace(snapshot.inventory)) return reject("backpack-full");
   const event: Extract<EngineEvent, { type: "open-chest" | "pickup-item" }> =
     type === "open-chest"
       ? {
@@ -624,8 +628,9 @@ function useItemObject(
     if (!nextObject || nextObject.id !== object.id)
       throw new Error("Item disappeared during resolution.");
     nextObject.used = true;
-    next.inventory.push(event.itemId);
-    next.inventory.sort();
+    if (!addToBackpack(next.inventory, event.itemId)) {
+      throw new Error("Inventory capacity changed during item pickup.");
+    }
     next.actionPoints -= event.cost;
   });
 }
@@ -809,7 +814,8 @@ function applyRecordedEvent(
         !isAdjacent(snapshot.character.position, event.target) ||
         !object ||
         object.id !== event.objectId ||
-        object.itemId !== event.itemId
+        object.itemId !== event.itemId ||
+        !hasBackpackSpace(snapshot.inventory)
       ) {
         return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
       }
@@ -819,8 +825,9 @@ function applyRecordedEvent(
           const nextObject = objectAt(next, event.target, type);
           if (!nextObject) throw new Error("Recorded item disappeared during replay.");
           nextObject.used = true;
-          next.inventory.push(event.itemId);
-          next.inventory.sort();
+          if (!addToBackpack(next.inventory, event.itemId)) {
+            throw new Error("Inventory capacity changed during replay.");
+          }
           next.actionPoints -= event.cost;
         }).snapshot,
       };
@@ -1030,6 +1037,7 @@ function validateRunDefinition(definition: RunDefinition): RejectedCreateRunResu
   }
   if (
     !hasValidCombatantStats(definition.character) ||
+    !hasValidInitialInventory(definition.character) ||
     (definition.character.class !== undefined &&
       !["vanguard", "ranger", "arcanist"].includes(definition.character.class)) ||
     (definition.character.resurrectionCharges !== undefined &&
@@ -1162,6 +1170,45 @@ function hasValidCombatantStats(stats: CombatantStats): boolean {
     isNonNegativeInteger(stats.power) &&
     isNonNegativeInteger(stats.focus)
   );
+}
+
+function hasValidInitialInventory(character: CharacterDefinition): boolean {
+  const equipment = character.equipment;
+  if (
+    equipment !== undefined &&
+    Object.values(equipment).some((itemId) => itemId !== null && !isNonEmptyString(itemId))
+  ) {
+    return false;
+  }
+  return (
+    character.backpack === undefined ||
+    (character.backpack.length <= BACKPACK_SLOT_COUNT &&
+      character.backpack.every((itemId) => isNonEmptyString(itemId)))
+  );
+}
+
+function createInventory(character: CharacterDefinition): Snapshot["inventory"] {
+  const backpack = [...(character.backpack ?? [])];
+  return {
+    weapon: character.equipment?.weapon ?? null,
+    armor: character.equipment?.armor ?? null,
+    accessory: character.equipment?.accessory ?? null,
+    backpack: [
+      ...backpack,
+      ...Array<string | null>(BACKPACK_SLOT_COUNT - backpack.length).fill(null),
+    ],
+  };
+}
+
+function hasBackpackSpace(inventory: Snapshot["inventory"]): boolean {
+  return inventory.backpack.some((itemId) => itemId === null);
+}
+
+function addToBackpack(inventory: Snapshot["inventory"], itemId: string): boolean {
+  const slot = inventory.backpack.indexOf(null);
+  if (slot === -1) return false;
+  inventory.backpack[slot] = itemId;
+  return true;
 }
 
 function attackPreview(
@@ -1354,10 +1401,14 @@ function tileAt(snapshot: Pick<Snapshot, "tiles">, position: Position): FloorTil
 
 function canInteract(snapshot: Snapshot, position: Position): boolean {
   const tile = tileAt(snapshot, position);
+  const object = objectAt(snapshot, position);
   return (
     (tile?.terrain === "objective" && !snapshot.objectiveCollected) ||
     (tile?.terrain === "exit" && snapshot.objectiveCollected && !snapshot.exitUnlocked) ||
-    objectAt(snapshot, position) !== undefined
+    (object !== undefined &&
+      (object.type !== "chest" && object.type !== "item"
+        ? true
+        : hasBackpackSpace(snapshot.inventory)))
   );
 }
 

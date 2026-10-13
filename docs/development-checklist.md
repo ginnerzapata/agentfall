@@ -111,7 +111,7 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 ## 5. Inventory, Recovery, and Progression
 
-- [ ] Implement weapon, armor, accessory, and four backpack slots.
+- [x] Implement weapon, armor, accessory, and four backpack slots.
 - [ ] Stack identical consumables and permanently discard dropped items.
 - [ ] Make between-floor inventory changes free and in-floor swaps cost one Action.
 - [ ] Implement potions and one-use sanctuaries without free resting.

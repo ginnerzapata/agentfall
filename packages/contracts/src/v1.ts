@@ -1,6 +1,6 @@
 // These versions describe serialized values, not the contracts package version.
-export const SNAPSHOT_SCHEMA_VERSION = 8;
-export const ENGINE_EVENT_SCHEMA_VERSION = 8;
+export const SNAPSHOT_SCHEMA_VERSION = 9;
+export const ENGINE_EVENT_SCHEMA_VERSION = 9;
 export const ACTION_POINT_LIMIT = 4;
 export const MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS = 2;
 export const D20_SIDES = 20;
@@ -23,6 +23,7 @@ export const ABILITY_ACTION_POINT_COST = {
 } as const;
 export const ARC_BOLT_RANGE = 4;
 export const SCOUT_RANGE = 8;
+export const BACKPACK_SLOT_COUNT = 4;
 
 export function canonicalStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -78,6 +79,17 @@ export type CombatantStats = {
 
 export type CharacterClass = "vanguard" | "ranger" | "arcanist";
 
+export type EquipmentSlots = {
+  weapon: string | null;
+  armor: string | null;
+  accessory: string | null;
+};
+
+export type InventoryState = EquipmentSlots & {
+  /** Ordered fixed-capacity carrying slots; empty slots are represented by null. */
+  backpack: Array<string | null>;
+};
+
 /**
  * A class-neutral route through the required floor sequence. Closed doors are
  * traversable because opening them is a universal Action; walls are not.
@@ -96,6 +108,8 @@ export type MandatoryObjectiveSolvability = {
 export type CharacterDefinition = CombatantStats & {
   position: Position;
   class?: CharacterClass;
+  equipment?: Partial<EquipmentSlots>;
+  backpack?: string[];
   /** A rare item that automatically prevents one otherwise lethal event. */
   resurrectionCharges?: 0 | 1;
 };
@@ -217,7 +231,7 @@ export type Snapshot = {
   rememberedTiles: RememberedTile[];
   objectiveCollected: boolean;
   exitUnlocked: boolean;
-  inventory: string[];
+  inventory: InventoryState;
   turn: number;
   actionPoints: number;
   character: CharacterState;
@@ -269,7 +283,8 @@ export type ActionRejectionReason =
   | "invalid-target"
   | "invalid-interaction"
   | "invalid-ability"
-  | "character-dead";
+  | "character-dead"
+  | "backpack-full";
 
 export type RunDefinitionRejectionReason =
   | "invalid-board-dimensions"

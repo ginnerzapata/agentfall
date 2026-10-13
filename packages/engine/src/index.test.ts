@@ -123,6 +123,47 @@ describe("deterministic engine", () => {
     expect(nextTurn.snapshot.actionPoints).toBe(ACTION_POINT_LIMIT);
   });
 
+  test("models equipped weapon, armor, accessory, and four ordered backpack slots", () => {
+    const definition: RunDefinition = {
+      ...run,
+      board: { width: 3, height: 2 },
+      enemies: [],
+      character: {
+        ...run.character,
+        equipment: { weapon: "short-sword", armor: "leather", accessory: "lucky-charm" },
+        backpack: ["rations"],
+      },
+      objects: [{ id: "tonic", type: "item", position: { x: 1, y: 0 }, itemId: "tonic" }],
+    };
+    const initial = createSnapshot(definition);
+    expect(initial.inventory).toEqual({
+      weapon: "short-sword",
+      armor: "leather",
+      accessory: "lucky-charm",
+      backpack: ["rations", null, null, null],
+    });
+    const pickedUp = act(initial, { type: "interact", target: { x: 1, y: 0 } });
+    if (!pickedUp.accepted) throw new Error("Expected item pickup to be accepted.");
+    expect(pickedUp.snapshot.inventory.backpack).toEqual(["rations", "tonic", null, null]);
+    expect(replayEvents(withTilesForBoard(definition), pickedUp.snapshot.events)).toEqual({
+      accepted: true,
+      snapshot: pickedUp.snapshot,
+    });
+
+    const full = createSnapshot({
+      ...definition,
+      character: { ...definition.character, backpack: ["a", "b", "c", "d"] },
+    });
+    expect(observe(full).legalActions).not.toContainEqual({
+      type: "interact",
+      targets: [{ x: 1, y: 0 }],
+    });
+    expect(act(full, { type: "interact", target: { x: 1, y: 0 } })).toEqual({
+      accepted: false,
+      reason: "backpack-full",
+    });
+  });
+
   test("allows movement before and after an attack in the same turn", () => {
     const definition: RunDefinition = {
       ...run,
@@ -842,7 +883,12 @@ describe("deterministic engine", () => {
     }
 
     expect(snapshot.character.health).toBe(12);
-    expect(snapshot.inventory).toEqual(["potion", "tonic"]);
+    expect(snapshot.inventory).toEqual({
+      weapon: null,
+      armor: null,
+      accessory: null,
+      backpack: ["potion", "tonic", null, null],
+    });
     expect(snapshot.exitUnlocked).toBe(true);
     expect(snapshot.objects.every((object) => object.used)).toBe(true);
     const replayed = replayEvents(definition, snapshot.events);
