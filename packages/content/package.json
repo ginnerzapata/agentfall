@@ -2,5 +2,8 @@
   "name": "@agentfall/content",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@agentfall/contracts": "workspace:*"
+  },
   "exports": "./src/index.ts"
 }

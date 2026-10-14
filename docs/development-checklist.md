@@ -125,21 +125,21 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 ## 6. Floor Generation and Validation
 
-- [ ] Define versioned TypeScript schemas for room, encounter, enemy, item, trait, and boss content.
-- [ ] Author reusable room templates tagged by difficulty and required capabilities.
-- [ ] Deterministically assemble connected floors of six to ten rooms.
-- [ ] Place the entrance, locked exit, mandatory objective, encounters, rewards, healing, trap, and optional secret area.
-- [ ] Calculate a deterministic floor turn budget from floor content.
-- [ ] Validate connectivity and objective reachability.
-- [ ] Validate that each class can complete every mandatory path.
-- [ ] Validate that the turn budget is feasible without guaranteeing exhaustive exploration.
-- [ ] Reject an invalid generated season before publication.
+- [x] Define versioned TypeScript schemas for room, encounter, enemy, item, trait, and boss content.
+- [x] Author reusable room templates tagged by difficulty and required capabilities.
+- [x] Deterministically assemble connected floors of six to ten rooms.
+- [x] Place the entrance, locked exit, mandatory objective, encounters, rewards, healing, trap, and optional secret area.
+- [x] Calculate a deterministic floor turn budget from floor content.
+- [x] Validate connectivity and objective reachability.
+- [x] Validate that each class can complete every mandatory path.
+- [x] Validate that the turn budget is feasible without guaranteeing exhaustive exploration.
+- [x] Reject an invalid generated season before publication.
 
 ### Generator exit check
 
-- [ ] Property tests validate many seeds without impossible floors or illegal state.
-- [ ] Given the same seed and content version, generation is byte-identical.
-- [ ] A generated floor targets approximately 60–100 meaningful character decisions.
+- [x] Property tests validate many seeds without impossible floors or illegal state.
+- [x] Given the same seed and content version, generation is byte-identical.
+- [x] A generated floor targets approximately 60–100 meaningful character decisions.
 
 ## 7. Orc Siege Content Pack
 

@@ -15,6 +15,9 @@
     },
     "packages/content": {
       "name": "@agentfall/content",
+      "dependencies": {
+        "@agentfall/contracts": "workspace:*",
+      },
     },
     "packages/contracts": {
       "name": "@agentfall/contracts",

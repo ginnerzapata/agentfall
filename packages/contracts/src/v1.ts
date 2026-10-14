@@ -25,6 +25,8 @@ export const ABILITY_ACTION_POINT_COST = {
 export const ARC_BOLT_RANGE = 4;
 export const SCOUT_RANGE = 8;
 export const BACKPACK_SLOT_COUNT = 4;
+/** Version of serialized authored and generated floor content. */
+export const FLOOR_CONTENT_SCHEMA_VERSION = 1;
 
 export function canonicalStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -191,6 +193,61 @@ export type RunDefinition = {
   objects: FloorObjectDefinition[];
   character: CharacterDefinition;
   enemies: EnemyState[];
+};
+
+/** Content declarations are intentionally data-only so a published season can be audited. */
+export type RequiredCapability = "none" | "open-door" | "ranged" | "hazard-safe";
+
+export type RoomContent = {
+  schemaVersion: typeof FLOOR_CONTENT_SCHEMA_VERSION;
+  id: string;
+  difficulty: 1 | 2 | 3;
+  requiredCapabilities: RequiredCapability[];
+  tags: string[];
+  width: number;
+  height: number;
+};
+
+export type EnemyContent = {
+  schemaVersion: typeof FLOOR_CONTENT_SCHEMA_VERSION;
+  id: string;
+  behavior: EnemyBehavior;
+  stats: Omit<CombatantStats, "health"> & { health: number };
+};
+
+export type EncounterContent = {
+  schemaVersion: typeof FLOOR_CONTENT_SCHEMA_VERSION;
+  id: string;
+  difficulty: 1 | 2 | 3;
+  enemyIds: string[];
+  tags: string[];
+};
+
+export type ItemContent = ItemDefinition & {
+  schemaVersion: typeof FLOOR_CONTENT_SCHEMA_VERSION;
+  rarity: "common" | "uncommon" | "rare";
+};
+
+export type TraitContent = Trait & { schemaVersion: typeof FLOOR_CONTENT_SCHEMA_VERSION };
+
+export type BossContent = {
+  schemaVersion: typeof FLOOR_CONTENT_SCHEMA_VERSION;
+  id: string;
+  encounterId: string;
+  preparationRoomId: string;
+  arenaRoomId: string;
+  rewardRoomId: string;
+};
+
+export type FloorContentPack = {
+  schemaVersion: typeof FLOOR_CONTENT_SCHEMA_VERSION;
+  version: string;
+  rooms: RoomContent[];
+  enemies: EnemyContent[];
+  encounters: EncounterContent[];
+  items: ItemContent[];
+  traits: TraitContent[];
+  bosses: BossContent[];
 };
 
 export type Action =
