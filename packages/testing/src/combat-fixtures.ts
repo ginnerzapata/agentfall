@@ -77,13 +77,13 @@ export const combatGoldenFixtures: CombatGoldenFixture[] = [
     "basic-hit",
     { character: { ...baseCharacter, accuracy: 20 } },
     [{ type: "attack", targetId: "goblin" }],
-    '[{"cost":2,"damage":1,"roll":7,"schemaVersion":9,"targetId":"goblin","type":"attack"}]',
+    '[{"cost":2,"damage":1,"roll":7,"schemaVersion":10,"targetId":"goblin","type":"attack"}]',
   ),
   fixture(
     "basic-miss",
     { enemies: [{ ...baseEnemy, defense: 30 }] },
     [{ type: "attack", targetId: "goblin" }],
-    '[{"cost":2,"damage":0,"roll":19,"schemaVersion":9,"targetId":"goblin","type":"attack"}]',
+    '[{"cost":2,"damage":0,"roll":19,"schemaVersion":10,"targetId":"goblin","type":"attack"}]',
   ),
   fixture(
     "death",
@@ -93,7 +93,7 @@ export const combatGoldenFixtures: CombatGoldenFixture[] = [
       objects: [{ id: "spikes", type: "trap", position: { x: 1, y: 0 }, damage: 2 }],
     },
     [{ type: "move", direction: "east" }],
-    '[{"cost":1,"direction":"east","from":{"x":0,"y":0},"schemaVersion":9,"to":{"x":1,"y":0},"triggeredTrap":{"damage":2,"id":"spikes","outcome":{"died":true,"health":0,"resurrected":false}},"type":"move"}]',
+    '[{"cost":1,"direction":"east","from":{"x":0,"y":0},"schemaVersion":10,"to":{"x":1,"y":0},"triggeredTrap":{"damage":2,"id":"spikes","outcome":{"died":true,"health":0,"resurrected":false}},"type":"move"}]',
   ),
   fixture(
     "resurrection",
@@ -103,19 +103,19 @@ export const combatGoldenFixtures: CombatGoldenFixture[] = [
       objects: [{ id: "spikes", type: "trap", position: { x: 1, y: 0 }, damage: 2 }],
     },
     [{ type: "move", direction: "east" }],
-    '[{"cost":1,"direction":"east","from":{"x":0,"y":0},"schemaVersion":9,"to":{"x":1,"y":0},"triggeredTrap":{"damage":2,"id":"spikes","outcome":{"died":false,"health":1,"resurrected":true}},"type":"move"}]',
+    '[{"cost":1,"direction":"east","from":{"x":0,"y":0},"schemaVersion":10,"to":{"x":1,"y":0},"triggeredTrap":{"damage":2,"id":"spikes","outcome":{"died":false,"health":1,"resurrected":true}},"type":"move"}]',
   ),
   fixture(
     "enemy-retreat",
     { enemies: [{ ...baseEnemy, behavior: "skirmish" }] },
     [{ type: "end-turn" }],
-    '[{"enemyMoves":[{"enemyId":"goblin","from":{"x":1,"y":0},"to":{"x":2,"y":0}}],"schemaVersion":9,"temporaryDefense":2,"type":"end-turn"}]',
+    '[{"enemyMoves":[{"enemyId":"goblin","from":{"x":1,"y":0},"to":{"x":2,"y":0}}],"schemaVersion":10,"temporaryDefense":2,"type":"end-turn"}]',
   ),
   fixture(
     "vanguard-guard",
     { character: { ...baseCharacter, class: "vanguard" }, enemies: [] },
     [{ type: "guard" }],
-    '[{"cost":2,"expiresTurn":2,"protectedTiles":[{"x":1,"y":0},{"x":0,"y":1}],"schemaVersion":9,"type":"guard"}]',
+    '[{"cost":2,"expiresTurn":2,"protectedTiles":[{"x":1,"y":0},{"x":0,"y":1}],"schemaVersion":10,"type":"guard"}]',
   ),
   fixture(
     "vanguard-shove",
@@ -142,13 +142,13 @@ export const combatGoldenFixtures: CombatGoldenFixture[] = [
       ),
     },
     [{ type: "shove", targetId: "goblin" }],
-    '[{"cost":2,"damage":3,"schemaVersion":9,"targetId":"goblin","type":"shove"}]',
+    '[{"cost":2,"damage":3,"schemaVersion":10,"targetId":"goblin","type":"shove"}]',
   ),
   fixture(
     "ranger-scout",
     { character: { ...baseCharacter, class: "ranger" }, enemies: [] },
     [{ type: "scout", direction: "east" }],
-    '[{"cost":2,"direction":"east","revealed":[{"x":1,"y":0},{"x":2,"y":0},{"x":3,"y":0},{"x":4,"y":0},{"x":1,"y":1},{"x":2,"y":1},{"x":3,"y":1},{"x":4,"y":1}],"schemaVersion":9,"type":"scout"}]',
+    '[{"cost":2,"direction":"east","revealed":[{"x":1,"y":0},{"x":2,"y":0},{"x":3,"y":0},{"x":4,"y":0},{"x":1,"y":1},{"x":2,"y":1},{"x":3,"y":1},{"x":4,"y":1}],"schemaVersion":10,"type":"scout"}]',
   ),
   fixture(
     "ranger-disengaging-shot",
@@ -169,7 +169,7 @@ export const combatGoldenFixtures: CombatGoldenFixture[] = [
       ],
     },
     [{ type: "disengaging-shot", targetId: "goblin" }],
-    '[{"cost":3,"damage":2,"roll":6,"schemaVersion":9,"targetId":"goblin","to":{"x":0,"y":0},"type":"disengaging-shot"}]',
+    '[{"cost":3,"damage":2,"roll":6,"schemaVersion":10,"targetId":"goblin","to":{"x":0,"y":0},"type":"disengaging-shot"}]',
   ),
   fixture(
     "arcanist-arc-bolt",
@@ -178,13 +178,13 @@ export const combatGoldenFixtures: CombatGoldenFixture[] = [
       enemies: [{ ...baseEnemy, position: { x: 3, y: 0 }, focus: 1 }],
     },
     [{ type: "arc-bolt", targetId: "goblin" }],
-    '[{"cost":2,"damage":5,"schemaVersion":9,"targetId":"goblin","type":"arc-bolt"}]',
+    '[{"cost":2,"damage":5,"schemaVersion":10,"targetId":"goblin","type":"arc-bolt"}]',
   ),
   fixture(
     "arcanist-ward",
     { character: { ...baseCharacter, class: "arcanist", focus: 4 }, enemies: [] },
     [{ type: "ward" }],
-    '[{"cost":2,"expiresTurn":2,"protection":6,"schemaVersion":9,"type":"ward"}]',
+    '[{"cost":2,"expiresTurn":2,"protection":6,"schemaVersion":10,"type":"ward"}]',
   ),
 ];
 

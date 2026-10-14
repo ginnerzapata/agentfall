@@ -175,6 +175,8 @@ export function act(snapshot: Snapshot, action: Action): ActionResult {
       return disengagingShot(snapshot, action.targetId);
     case "arc-bolt":
       return arcBolt(snapshot, action.targetId);
+    case "drop-item":
+      return dropItem(snapshot, action.slot);
     case "ward":
       return ward(snapshot);
     case "end-turn":
@@ -258,6 +260,12 @@ export function observe(snapshot: Snapshot): Observation {
   }
   if (characterClass === "arcanist" && snapshot.actionPoints >= ABILITY_ACTION_POINT_COST.ward) {
     legalActions.push({ type: "ward" });
+  }
+  const occupiedBackpackSlots = snapshot.inventory.backpack
+    .map((stack, slot) => (stack === null ? undefined : slot))
+    .filter((slot): slot is number => slot !== undefined);
+  if (snapshot.actionPoints >= ACTION_POINT_COST.dropItem && occupiedBackpackSlots.length > 0) {
+    legalActions.push({ type: "drop-item", slots: occupiedBackpackSlots });
   }
   legalActions.push({ type: "end-turn" });
 
@@ -527,6 +535,28 @@ function ward(snapshot: Snapshot): ActionResult {
   });
 }
 
+function dropItem(snapshot: Snapshot, slot: number): ActionResult {
+  const actionPointRejection = rejectForInsufficientActionPoints(
+    snapshot,
+    ACTION_POINT_COST.dropItem,
+  );
+  if (actionPointRejection) return actionPointRejection;
+  const stack = snapshot.inventory.backpack[slot];
+  if (!Number.isSafeInteger(slot) || slot < 0 || !stack) return reject("invalid-target");
+  const event: Extract<EngineEvent, { type: "drop-item" }> = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "drop-item",
+    slot,
+    itemId: stack.itemId,
+    quantity: stack.quantity,
+    cost: ACTION_POINT_COST.dropItem,
+  };
+  return applyEvent(snapshot, event, (next) => {
+    next.inventory.backpack[event.slot] = null;
+    next.actionPoints -= event.cost;
+  });
+}
+
 function endTurn(snapshot: Snapshot): ActionResult {
   const temporaryDefense = temporaryDefenseFromUnusedActionPoints(snapshot.actionPoints);
   const event: EngineEvent = {
@@ -604,7 +634,7 @@ function useItemObject(
     | Extract<FloorObjectState, { type: "item" }>,
   type: "open-chest" | "pickup-item",
 ): ActionResult {
-  if (!hasBackpackSpace(snapshot.inventory)) return reject("backpack-full");
+  if (!hasBackpackSpace(snapshot.inventory, object.itemId)) return reject("backpack-full");
   const event: Extract<EngineEvent, { type: "open-chest" | "pickup-item" }> =
     type === "open-chest"
       ? {
@@ -745,6 +775,27 @@ function applyRecordedEvent(
         }).snapshot,
       };
     }
+    case "drop-item": {
+      const stack = snapshot.inventory.backpack[event.slot];
+      if (
+        event.cost !== ACTION_POINT_COST.dropItem ||
+        snapshot.actionPoints < event.cost ||
+        !Number.isSafeInteger(event.slot) ||
+        event.slot < 0 ||
+        !stack ||
+        stack.itemId !== event.itemId ||
+        stack.quantity !== event.quantity
+      ) {
+        return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
+      }
+      return {
+        accepted: true,
+        snapshot: applyEvent(snapshot, event, (next) => {
+          next.inventory.backpack[event.slot] = null;
+          next.actionPoints -= event.cost;
+        }).snapshot,
+      };
+    }
     case "guard":
       return replayAbilityEvent(snapshot, eventIndex, event, { type: "guard" });
     case "shove":
@@ -815,7 +866,7 @@ function applyRecordedEvent(
         !object ||
         object.id !== event.objectId ||
         object.itemId !== event.itemId ||
-        !hasBackpackSpace(snapshot.inventory)
+        !hasBackpackSpace(snapshot.inventory, event.itemId)
       ) {
         return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
       }
@@ -1188,26 +1239,34 @@ function hasValidInitialInventory(character: CharacterDefinition): boolean {
 }
 
 function createInventory(character: CharacterDefinition): Snapshot["inventory"] {
-  const backpack = [...(character.backpack ?? [])];
-  return {
+  const inventory: Snapshot["inventory"] = {
     weapon: character.equipment?.weapon ?? null,
     armor: character.equipment?.armor ?? null,
     accessory: character.equipment?.accessory ?? null,
-    backpack: [
-      ...backpack,
-      ...Array<string | null>(BACKPACK_SLOT_COUNT - backpack.length).fill(null),
-    ],
+    backpack: Array<Snapshot["inventory"]["backpack"][number]>(BACKPACK_SLOT_COUNT).fill(null),
   };
+  for (const itemId of character.backpack ?? []) {
+    if (!addToBackpack(inventory, itemId)) throw new Error("Validated backpack did not fit.");
+  }
+  return inventory;
 }
 
-function hasBackpackSpace(inventory: Snapshot["inventory"]): boolean {
-  return inventory.backpack.some((itemId) => itemId === null);
+function hasBackpackSpace(inventory: Snapshot["inventory"], itemId: string): boolean {
+  return (
+    inventory.backpack.some((stack) => stack?.itemId === itemId) ||
+    inventory.backpack.some((stack) => stack === null)
+  );
 }
 
 function addToBackpack(inventory: Snapshot["inventory"], itemId: string): boolean {
+  const matchingStack = inventory.backpack.find((stack) => stack?.itemId === itemId);
+  if (matchingStack) {
+    matchingStack.quantity += 1;
+    return true;
+  }
   const slot = inventory.backpack.indexOf(null);
   if (slot === -1) return false;
-  inventory.backpack[slot] = itemId;
+  inventory.backpack[slot] = { itemId, quantity: 1 };
   return true;
 }
 
@@ -1408,7 +1467,7 @@ function canInteract(snapshot: Snapshot, position: Position): boolean {
     (object !== undefined &&
       (object.type !== "chest" && object.type !== "item"
         ? true
-        : hasBackpackSpace(snapshot.inventory)))
+        : hasBackpackSpace(snapshot.inventory, object.itemId)))
   );
 }
 

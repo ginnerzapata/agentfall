@@ -1,6 +1,6 @@
 // These versions describe serialized values, not the contracts package version.
-export const SNAPSHOT_SCHEMA_VERSION = 9;
-export const ENGINE_EVENT_SCHEMA_VERSION = 9;
+export const SNAPSHOT_SCHEMA_VERSION = 10;
+export const ENGINE_EVENT_SCHEMA_VERSION = 10;
 export const ACTION_POINT_LIMIT = 4;
 export const MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS = 2;
 export const D20_SIDES = 20;
@@ -12,6 +12,7 @@ export const ACTION_POINT_COST = {
   interact: 1,
   openDoor: 1,
   closeDoor: 1,
+  dropItem: 1,
 } as const;
 export const ABILITY_ACTION_POINT_COST = {
   guard: 2,
@@ -85,9 +86,14 @@ export type EquipmentSlots = {
   accessory: string | null;
 };
 
+export type InventoryStack = {
+  itemId: string;
+  quantity: number;
+};
+
 export type InventoryState = EquipmentSlots & {
   /** Ordered fixed-capacity carrying slots; empty slots are represented by null. */
-  backpack: Array<string | null>;
+  backpack: Array<InventoryStack | null>;
 };
 
 /**
@@ -166,6 +172,7 @@ export type Action =
   | { type: "disengaging-shot"; targetId: string }
   | { type: "arc-bolt"; targetId: string }
   | { type: "ward" }
+  | { type: "drop-item"; slot: number }
   | { type: "end-turn" };
 
 export type EngineEvent = {
@@ -205,6 +212,7 @@ export type EngineEvent = {
     }
   | { type: "arc-bolt"; targetId: string; damage: number; cost: 2 }
   | { type: "ward"; protection: number; expiresTurn: number; cost: 2 }
+  | { type: "drop-item"; slot: number; itemId: string; quantity: number; cost: 1 }
   | {
       type: "end-turn";
       temporaryDefense: number;
@@ -252,6 +260,7 @@ export type LegalAction =
   | { type: "disengaging-shot"; targetIds: string[] }
   | { type: "arc-bolt"; targetIds: string[] }
   | { type: "ward" }
+  | { type: "drop-item"; slots: number[] }
   | { type: "end-turn" };
 
 export type ObservedTile = FloorTile & { visibility: "visible" | "remembered" };

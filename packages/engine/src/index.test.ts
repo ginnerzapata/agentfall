@@ -109,6 +109,7 @@ describe("deterministic engine", () => {
       interact: 1,
       openDoor: 1,
       closeDoor: 1,
+      dropItem: 1,
     });
 
     let snapshot = createSnapshot({ ...run, enemies: [], board: { width: 3, height: 2 } });
@@ -133,21 +134,39 @@ describe("deterministic engine", () => {
         equipment: { weapon: "short-sword", armor: "leather", accessory: "lucky-charm" },
         backpack: ["rations"],
       },
-      objects: [{ id: "tonic", type: "item", position: { x: 1, y: 0 }, itemId: "tonic" }],
+      objects: [
+        { id: "tonic", type: "item", position: { x: 1, y: 0 }, itemId: "tonic" },
+        { id: "more-rations", type: "item", position: { x: 0, y: 1 }, itemId: "rations" },
+      ],
     };
     const initial = createSnapshot(definition);
     expect(initial.inventory).toEqual({
       weapon: "short-sword",
       armor: "leather",
       accessory: "lucky-charm",
-      backpack: ["rations", null, null, null],
+      backpack: [{ itemId: "rations", quantity: 1 }, null, null, null],
     });
     const pickedUp = act(initial, { type: "interact", target: { x: 1, y: 0 } });
     if (!pickedUp.accepted) throw new Error("Expected item pickup to be accepted.");
-    expect(pickedUp.snapshot.inventory.backpack).toEqual(["rations", "tonic", null, null]);
-    expect(replayEvents(withTilesForBoard(definition), pickedUp.snapshot.events)).toEqual({
+    const stacked = act(pickedUp.snapshot, { type: "interact", target: { x: 0, y: 1 } });
+    if (!stacked.accepted) throw new Error("Expected matching consumable pickup to be accepted.");
+    expect(stacked.snapshot.inventory.backpack).toEqual([
+      { itemId: "rations", quantity: 2 },
+      { itemId: "tonic", quantity: 1 },
+      null,
+      null,
+    ]);
+    const dropped = act(stacked.snapshot, { type: "drop-item", slot: 1 });
+    if (!dropped.accepted) throw new Error("Expected item drop to be accepted.");
+    expect(dropped.snapshot.inventory.backpack).toEqual([
+      { itemId: "rations", quantity: 2 },
+      null,
+      null,
+      null,
+    ]);
+    expect(replayEvents(withTilesForBoard(definition), dropped.snapshot.events)).toEqual({
       accepted: true,
-      snapshot: pickedUp.snapshot,
+      snapshot: dropped.snapshot,
     });
 
     const full = createSnapshot({
@@ -887,7 +906,7 @@ describe("deterministic engine", () => {
       weapon: null,
       armor: null,
       accessory: null,
-      backpack: ["potion", "tonic", null, null],
+      backpack: [{ itemId: "potion", quantity: 1 }, { itemId: "tonic", quantity: 1 }, null, null],
     });
     expect(snapshot.exitUnlocked).toBe(true);
     expect(snapshot.objects.every((object) => object.used)).toBe(true);
