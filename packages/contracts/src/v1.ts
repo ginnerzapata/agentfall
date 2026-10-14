@@ -91,6 +91,39 @@ export type InventoryStack = {
   quantity: number;
 };
 
+export type ItemKind = "weapon" | "armor" | "accessory" | "consumable";
+
+/** Versioned item facts needed by the deterministic inventory and progression APIs. */
+export type ItemDefinition = {
+  id: string;
+  kind: ItemKind;
+  healing?: number;
+};
+
+export type InventoryContext = "between-floors" | "in-floor";
+
+export type Trait = {
+  id: string;
+  polarity: "positive" | "negative";
+  stat: keyof CombatantStats;
+  delta: number;
+};
+
+export type Upgrade = {
+  id: string;
+  stat: keyof CombatantStats;
+  delta: number;
+};
+
+export type ProgressionCharacter = {
+  character: CharacterDefinition;
+  inventory: InventoryState;
+  level: number;
+  injuries: string[];
+  traits: Trait[];
+  pendingUpgrades: Upgrade[];
+};
+
 export type InventoryState = EquipmentSlots & {
   /** Ordered fixed-capacity carrying slots; empty slots are represented by null. */
   backpack: Array<InventoryStack | null>;

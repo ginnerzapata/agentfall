@@ -113,15 +113,15 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 - [x] Implement weapon, armor, accessory, and four backpack slots.
 - [x] Stack identical consumables and permanently discard dropped items.
-- [ ] Make between-floor inventory changes free and in-floor swaps cost one Action.
-- [ ] Implement potions and one-use sanctuaries without free resting.
-- [ ] Preserve injuries, gear, and remaining consumables between normal floors.
-- [ ] Apply the small fixed recovery between normal floors.
-- [ ] Apply full recovery after boss floors.
-- [ ] Award one level after each normal floor.
-- [ ] Generate three deterministic class upgrade options and let the harness choose one.
-- [ ] Define and test the first balanced positive/negative trait pool.
-- [ ] Generate a deterministic class and trait pair for each new character sequence.
+- [x] Make between-floor inventory changes free and in-floor swaps cost one Action.
+- [x] Implement potions and one-use sanctuaries without free resting.
+- [x] Preserve injuries, gear, and remaining consumables between normal floors.
+- [x] Apply the small fixed recovery between normal floors.
+- [x] Apply full recovery after boss floors.
+- [x] Award one level after each normal floor.
+- [x] Generate three deterministic class upgrade options and let the harness choose one.
+- [x] Define and test the first balanced positive/negative trait pool.
+- [x] Generate a deterministic class and trait pair for each new character sequence.
 
 ## 6. Floor Generation and Validation
 

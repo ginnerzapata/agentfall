@@ -87,6 +87,7 @@ export {
   MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS,
   SCOUT_RANGE,
 } from "@agentfall/contracts";
+export * from "./progression";
 
 export function createRun(definition: RunDefinition): CreateRunResult {
   const rejection = validateRunDefinition(definition);
