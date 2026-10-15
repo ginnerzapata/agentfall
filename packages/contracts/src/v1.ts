@@ -211,7 +211,9 @@ export type RoomContent = {
 export type EnemyContent = {
   schemaVersion: typeof FLOOR_CONTENT_SCHEMA_VERSION;
   id: string;
+  role: "scout" | "brute" | "archer" | "shaman" | "boss";
   behavior: EnemyBehavior;
+  range?: number;
   stats: Omit<CombatantStats, "health"> & { health: number };
 };
 

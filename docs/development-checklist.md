@@ -143,16 +143,16 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 ## 7. Orc Siege Content Pack
 
-- [ ] Implement the goblin scout behavior and stats.
-- [ ] Implement the orc brute behavior and stats.
-- [ ] Implement the orc archer behavior and stats.
-- [ ] Implement the orc shaman behavior and stats.
-- [ ] Implement war drums and reinforcement behavior.
-- [ ] Author enough room and encounter templates for five varied floors.
-- [ ] Author the floor-five boss preparation room, arena, and reward room.
-- [ ] Implement both Orc Warchief phases and the telegraphed arena mechanic.
-- [ ] Add the Season Zero item and upgrade pools.
-- [ ] Simulate and tune all three classes through the complete five-floor tower.
+- [x] Implement the goblin scout behavior and stats.
+- [x] Implement the orc brute behavior and stats.
+- [x] Implement the orc archer behavior and stats.
+- [x] Implement the orc shaman behavior and stats.
+- [x] Implement war drums and reinforcement behavior.
+- [x] Author enough room and encounter templates for five varied floors.
+- [x] Author the floor-five boss preparation room, arena, and reward room.
+- [x] Implement both Orc Warchief phases and the telegraphed arena mechanic.
+- [x] Add the Season Zero item and upgrade pools.
+- [x] Simulate and tune all three classes through the complete five-floor tower.
 
 ## 8. Run, Failure, and Knowledge Rules
 

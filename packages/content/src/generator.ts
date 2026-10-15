@@ -59,9 +59,9 @@ export const DEFAULT_FLOOR_CONTENT: FloorContentPack = {
     room("hidden", 2, ["secret"]),
   ],
   enemies: [
-    enemy("scout", "skirmish", 6, 0, 2),
-    enemy("brute", "pursue", 9, 1, 2),
-    enemy("archer", "hold", 5, 0, 2),
+    enemy("scout", "scout", "skirmish", 6, 0, 2),
+    enemy("brute", "brute", "pursue", 9, 1, 2),
+    enemy("archer", "archer", "hold", 5, 0, 2),
   ],
   encounters: [
     encounter("patrol", 1, ["scout"]),
@@ -264,6 +264,7 @@ function room(id: string, difficulty: 1 | 2 | 3, tags: string[]): RoomContent {
 }
 function enemy(
   id: string,
+  role: EnemyContent["role"],
   behavior: EnemyContent["behavior"],
   health: number,
   defense: number,
@@ -272,6 +273,7 @@ function enemy(
   return {
     schemaVersion: FLOOR_CONTENT_SCHEMA_VERSION,
     id,
+    role,
     behavior,
     stats: { ...baseStats, health, maxHealth: health, defense, power },
   };
