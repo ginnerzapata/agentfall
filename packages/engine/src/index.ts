@@ -88,6 +88,7 @@ export {
   SCOUT_RANGE,
 } from "@agentfall/contracts";
 export * from "./progression";
+export * from "./run";
 
 export function createRun(definition: RunDefinition): CreateRunResult {
   const rejection = validateRunDefinition(definition);
@@ -1225,6 +1226,23 @@ function hasValidCombatantStats(stats: CombatantStats): boolean {
 }
 
 function hasValidInitialInventory(character: CharacterDefinition): boolean {
+  if (character.inventory !== undefined) {
+    const inventory = character.inventory;
+    const equipped = [inventory.weapon, inventory.armor, inventory.accessory];
+    if (
+      inventory.backpack.length !== BACKPACK_SLOT_COUNT ||
+      !equipped.every((itemId) => itemId === null || isNonEmptyString(itemId)) ||
+      !inventory.backpack.every(
+        (stack) =>
+          stack === null ||
+          (isNonEmptyString(stack.itemId) &&
+            Number.isSafeInteger(stack.quantity) &&
+            stack.quantity > 0),
+      )
+    ) {
+      return false;
+    }
+  }
   const equipment = character.equipment;
   if (
     equipment !== undefined &&
@@ -1240,6 +1258,7 @@ function hasValidInitialInventory(character: CharacterDefinition): boolean {
 }
 
 function createInventory(character: CharacterDefinition): Snapshot["inventory"] {
+  if (character.inventory !== undefined) return clone(character.inventory);
   const inventory: Snapshot["inventory"] = {
     weapon: character.equipment?.weapon ?? null,
     armor: character.equipment?.armor ?? null,

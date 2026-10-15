@@ -156,16 +156,16 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 ## 8. Run, Failure, and Knowledge Rules
 
-- [ ] Persist character state across completed floors in one Run.
-- [ ] Implement floor completion and the choice to leave optional content unexplored.
-- [ ] Implement floor collapse when the turn budget expires.
-- [ ] Implement voluntary abandonment with the same rollback behavior.
-- [ ] Spend the Expedition Charge while restoring pre-floor character state on rollback.
-- [ ] Discard uncommitted floor discoveries and harness notes on rollback.
-- [ ] Preserve committed death even if the floor later times out.
-- [ ] Generate a new random character after death and restart at floor one.
-- [ ] Maintain the account-private structured Journal across character deaths.
-- [ ] Store short harness-written notes separately as untrusted text.
+- [x] Persist character state across completed floors in one Run.
+- [x] Implement floor completion and the choice to leave optional content unexplored.
+- [x] Implement floor collapse when the turn budget expires.
+- [x] Implement voluntary abandonment with the same rollback behavior.
+- [x] Spend the Expedition Charge while restoring pre-floor character state on rollback.
+- [x] Discard uncommitted floor discoveries and harness notes on rollback.
+- [x] Preserve committed death even if the floor later times out.
+- [x] Generate a new random character after death and restart at floor one.
+- [x] Maintain the account-private structured Journal across character deaths.
+- [x] Store short harness-written notes separately as untrusted text.
 
 ## 9. Persistence with D1
 

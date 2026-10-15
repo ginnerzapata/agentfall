@@ -151,6 +151,8 @@ export type CharacterDefinition = CombatantStats & {
   class?: CharacterClass;
   equipment?: Partial<EquipmentSlots>;
   backpack?: string[];
+  /** Exact carried state used when a character enters a later floor. */
+  inventory?: InventoryState;
   /** A rare item that automatically prevents one otherwise lethal event. */
   resurrectionCharges?: 0 | 1;
 };
@@ -448,3 +450,41 @@ export type ReplayEventsResult =
   | { accepted: true; snapshot: Snapshot }
   | { accepted: false; snapshot: Snapshot; rejection: RecordedEventReplayRejection }
   | { accepted: false; rejection: RejectedCreateRunResult };
+
+/** A server-verified fact retained by an account after a successful floor. */
+export type JournalFact =
+  | { kind: "terrain"; floor: number; tiles: RememberedTile[] }
+  | { kind: "enemy"; floor: number; enemyIds: string[] }
+  | { kind: "death"; floor: number; cause: string };
+
+/** Harness-authored text is deliberately separate from server-verified facts. */
+export type HarnessNote = { floor: number; text: string };
+
+export type Journal = {
+  facts: JournalFact[];
+  notes: HarnessNote[];
+};
+
+export type FloorSession = {
+  floor: number;
+  kind: "normal" | "boss";
+  turnBudget: number;
+  preFloorCharacter: ProgressionCharacter;
+  snapshot: Snapshot;
+  pendingNotes: string[];
+};
+
+export type ExpeditionRun = {
+  runId: string;
+  seasonSeed: string;
+  characterSequence: number;
+  character: ProgressionCharacter;
+  expeditionCharges: number;
+  /** The only floor a living character may start next. */
+  nextFloor: number;
+  completedFloors: number;
+  characterDeaths: number;
+  journal: Journal;
+  activeFloor: FloorSession | null;
+  status: "active" | "dead";
+};
