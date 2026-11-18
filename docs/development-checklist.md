@@ -169,44 +169,44 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 ## 9. Persistence with D1
 
-- [ ] Design Drizzle schemas for accounts, credentials, seasons, characters, Runs, floor sessions, Events, Snapshots, Journals, charges, and standings.
-- [ ] Add versioned D1 migrations and local migration commands.
-- [ ] Implement persistence ports outside `packages/engine`.
-- [ ] Atomically append one Event and update one Snapshot per accepted Action.
-- [ ] Enforce optimistic Snapshot versions.
-- [ ] Enforce unique idempotency keys per mutation scope.
-- [ ] Make retries return the original committed result without advancing twice.
-- [ ] Ensure a failed batch leaves both Event and Snapshot unchanged.
-- [ ] Avoid persisting read-only Observations.
-- [ ] Add replay integrity checks and administrative reconstruction tooling.
-- [ ] Implement the agreed active-season and historical retention policy.
+- [x] Design Drizzle schemas for accounts, credentials, seasons, characters, Runs, floor sessions, Events, Snapshots, Journals, charges, and standings.
+- [x] Add versioned D1 migrations and local migration commands.
+- [x] Implement persistence ports outside `packages/engine`.
+- [x] Atomically append one Event and update one Snapshot per accepted Action.
+- [x] Enforce optimistic Snapshot versions.
+- [x] Enforce unique idempotency keys per mutation scope.
+- [x] Make retries return the original committed result without advancing twice.
+- [x] Ensure a failed batch leaves both Event and Snapshot unchanged.
+- [x] Avoid persisting read-only Observations.
+- [x] Add replay integrity checks and administrative reconstruction tooling.
+- [x] Implement the agreed active-season and historical retention policy.
 
 ### Persistence exit check
 
-- [ ] Concurrent requests against the same Snapshot produce at most one accepted transition.
-- [ ] Retried network requests cannot duplicate movement, attacks, charges, or rewards.
-- [ ] Stored Events reconstruct the stored Snapshot checksum.
+- [x] Concurrent requests against the same Snapshot produce at most one accepted transition.
+- [x] Retried network requests cannot duplicate movement, attacks, charges, or rewards.
+- [x] Stored Events reconstruct the stored Snapshot checksum.
 
 ## 10. Cloudflare Worker and HTTP Boundary
 
-- [ ] Configure `apps/server` for Cloudflare Workers and bind D1.
-- [ ] Use Hono for routing, errors, request IDs, secure headers, and request-size limits.
-- [ ] Add health and version endpoints that do not expose secrets.
-- [ ] Keep application use cases independent of Hono and MCP handlers.
-- [ ] Normalize typed domain failures into stable transport errors.
-- [ ] Add local Worker integration tests using actual bindings rather than mocks where practical.
-- [ ] Add request and mutation rate limits that preserve active floor sessions.
+- [x] Configure `apps/server` for Cloudflare Workers and bind D1.
+- [x] Use Hono for routing, errors, request IDs, secure headers, and request-size limits.
+- [x] Add health and version endpoints that do not expose secrets.
+- [x] Keep application use cases independent of Hono and MCP handlers.
+- [x] Normalize typed domain failures into stable transport errors.
+- [x] Add local Worker integration tests using actual bindings rather than mocks where practical.
+- [x] Add request and mutation rate limits that preserve active floor sessions.
 
 ## 11. MCP Server
 
-- [ ] Serve one stateless Streamable HTTP endpoint at `/mcp` with the official MCP TypeScript server SDK.
-- [ ] Confirm compatibility with the targeted Codex and Claude clients.
+- [x] Serve one stateless Streamable HTTP endpoint at `/mcp` with the official MCP TypeScript server SDK.
+- [x] Confirm compatibility with the targeted Codex and Claude clients.
 - [ ] Implement tools for floor start, Observation, typed Action, character, Journal, abandonment/end, season details, and standings.
-- [ ] Require an idempotency key for every mutating tool call.
-- [ ] Add accurate read-only and destructive tool annotations.
-- [ ] Keep tool names, descriptions, inputs, and results concise enough for harness use.
-- [ ] Ensure tool results never reveal hidden map, entity, seed, or future RNG information.
-- [ ] Publish copyable Codex and Claude connection instructions.
+- [x] Require an idempotency key for every mutating tool call.
+- [x] Add accurate read-only and destructive tool annotations.
+- [x] Keep tool names, descriptions, inputs, and results concise enough for harness use.
+- [x] Ensure tool results never reveal hidden map, entity, seed, or future RNG information.
+- [x] Publish copyable Codex and Claude connection instructions.
 
 ### Harness-playability exit check
 
@@ -217,28 +217,28 @@ The commands must pass from a clean checkout without undocumented manual setup.
 ## 12. GitHub Authentication and Credentials
 
 - [ ] Register the GitHub authentication application for the target environment.
-- [ ] Implement the minimal bootstrap login page and callback/device flow.
-- [ ] Map identity by immutable GitHub numeric ID rather than username.
-- [ ] Request only the minimum GitHub identity permissions.
-- [ ] Issue a high-entropy opaque Agentfall bearer credential.
-- [ ] Store only its secure hash and credential metadata.
-- [ ] Discard the GitHub token after identity verification unless a documented need requires encrypted retention.
-- [ ] Add credential listing, revocation, expiration, and rotation.
-- [ ] Keep credentials out of prompts, logs, URLs, and error messages.
-- [ ] Require explicit ranked enrollment and a unique Agentfall display name.
+- [x] Implement the minimal bootstrap login page and callback flow.
+- [x] Map identity by immutable GitHub numeric ID rather than username.
+- [x] Request only the minimum GitHub identity permissions.
+- [x] Issue a high-entropy opaque Agentfall bearer credential.
+- [x] Store only its secure hash and credential metadata.
+- [x] Discard the GitHub token after identity verification unless a documented need requires encrypted retention.
+- [x] Add credential listing, revocation, expiration, and rotation.
+- [x] Keep credentials out of prompts, logs, URLs, and error messages.
+- [x] Require explicit ranked enrollment and a unique Agentfall display name.
 
 ## 13. Expedition Charges and Sessions
 
-- [ ] Store charge count and the last charge calculation time.
-- [ ] Lazily regenerate one charge every four hours up to a cap of three.
-- [ ] Pause regeneration while at the cap.
-- [ ] Consume one charge atomically when starting a ranked floor.
-- [ ] Award one charge after a boss without exceeding the cap.
-- [ ] Enforce one living ranked character and one active ranked floor session per account.
-- [ ] Enforce one active Practice session per account.
-- [ ] Pause after ten minutes without a state-changing Action.
-- [ ] Allow safe resume within the 24-hour floor-session lifetime.
-- [ ] Abandon expired sessions according to the rollback rules.
+- [x] Store charge count and the last charge calculation time.
+- [x] Lazily regenerate one charge every four hours up to a cap of three.
+- [x] Pause regeneration while at the cap.
+- [x] Consume one charge atomically when starting a ranked floor.
+- [x] Award one charge after a boss without exceeding the cap.
+- [x] Enforce one living ranked character and one active ranked floor session per account.
+- [x] Enforce one active Practice session per account.
+- [x] Pause after ten minutes without a state-changing Action.
+- [x] Allow safe resume within the 24-hour floor-session lifetime.
+- [x] Abandon expired sessions according to the rollback rules.
 
 ## 14. Seasons, Rankings, and Replay Visibility
 

@@ -35,6 +35,9 @@ See the [product requirements](prd.md) for the complete accepted scope.
 
 No environment variables or external services are required for the current engine scaffold. The planned Worker and authentication configuration is documented in [`.env.example`](.env.example); copy it to `.env` only when working on those features and never commit its secrets.
 
+GitHub OAuth bootstrap and Agentfall credential setup are documented in
+[authentication](docs/authentication.md).
+
 ## Setup
 
 Clone the repository and install the locked dependencies:

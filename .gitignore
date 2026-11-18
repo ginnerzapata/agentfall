@@ -1,6 +1,7 @@
 # reference folder
 design
 node_modules
+apps/server/.wrangler
 
 # Local configuration may contain OAuth and credential-management secrets.
 .env

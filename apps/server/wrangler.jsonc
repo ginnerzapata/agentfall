@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "agentfall-server",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  "vars": { "RELEASE_VERSION": "dev" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "agentfall",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}
