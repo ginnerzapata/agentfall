@@ -5,7 +5,7 @@ import {
   type Snapshot,
 } from "@agentfall/contracts";
 import { abandonActiveFloor } from "@agentfall/engine";
-
+import { D1CapacityBudget } from "./capacity";
 import type { D1Database } from "./floor-store";
 
 const CHARGE_CAP = 3;
@@ -33,7 +33,10 @@ export type ChargeState = { available: number; calculatedAt: string };
  * or session change.
  */
 export class D1ExpeditionSessions {
-  constructor(private readonly database: D1Database) {}
+  constructor(
+    private readonly database: D1Database,
+    private readonly capacity = new D1CapacityBudget(database),
+  ) {}
 
   async charges(accountId: string, now: Date): Promise<ChargeState> {
     await this.ensureCharges(accountId, now);
@@ -48,8 +51,13 @@ export class D1ExpeditionSessions {
 
   async start(input: StartSessionInput): Promise<StartSessionResult> {
     await this.abandonExpired(input.now, input.accountId);
-    await this.ensureCharges(input.accountId, input.now);
-    await this.regenerate(input.accountId, input.now);
+    if (input.mode === "ranked" && (await this.charges(input.accountId, input.now)).available === 0)
+      return { accepted: false, reason: "no-charge" };
+    if (await this.hasOpenSession(input.accountId, input.mode))
+      return { accepted: false, reason: "session-active" };
+    const capacity = await this.capacity.reserve(input.sessionId, input.mode, input.now);
+    if (!capacity.accepted)
+      return { accepted: false, reason: "capacity-exhausted", resetAt: capacity.resetAt };
     const now = input.now.toISOString();
     const expiresAt = new Date(input.now.getTime() + SESSION_LIFETIME_MS).toISOString();
     const statements = [
@@ -245,6 +253,16 @@ export class D1ExpeditionSessions {
     ]);
   }
 
+  private async hasOpenSession(accountId: string, mode: FloorMode): Promise<boolean> {
+    const session = await this.database
+      .prepare(
+        "SELECT id FROM floor_sessions WHERE account_id = ? AND mode = ? AND status IN ('active', 'paused') LIMIT 1",
+      )
+      .bind(accountId, mode)
+      .first<{ id: string }>();
+    return session !== null;
+  }
+
   private async regenerate(accountId: string, now: Date) {
     const current = await this.database
       .prepare("SELECT available, calculated_at FROM charges WHERE account_id = ?")
@@ -279,7 +297,8 @@ export class D1ExpeditionSessions {
 
 export type StartSessionResult =
   | { accepted: true; expiresAt: string }
-  | { accepted: false; reason: "no-charge" | "session-active" };
+  | { accepted: false; reason: "no-charge" | "session-active" }
+  | { accepted: false; reason: "capacity-exhausted"; resetAt: string };
 type ChargeRow = { available: number; calculated_at: string };
 type SessionRow = { status: string; expires_at: string };
 type ExpiredSessionRow = { id: string; run_id: string; floor: number; state_json: string };

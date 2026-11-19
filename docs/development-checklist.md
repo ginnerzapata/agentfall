@@ -259,13 +259,13 @@ The commands must pass from a clean checkout without undocumented manual setup.
 - [x] Build authenticated CLI commands to generate, validate, publish, activate, end, and reveal a season.
 - [x] Require explicit confirmation and successful validation before publication.
 - [x] Keep administrative secrets outside the repository.
-- [ ] Define an internal daily read/write/request budget below free-tier quotas.
-- [ ] Reserve conservative write capacity before admitting a floor session.
-- [ ] Reject new Practice sessions before ranked sessions under pressure.
-- [ ] Preserve admitted sessions while their reserved capacity remains.
-- [ ] Return typed `CAPACITY_EXHAUSTED` failures with the expected UTC reset time.
-- [ ] Confirm that no Cloudflare resource can automatically begin paid usage.
-- [ ] Exercise quota and persistence-failure behavior in integration tests.
+- [x] Define an internal daily read/write/request budget below free-tier quotas.
+- [x] Reserve conservative write capacity before admitting a floor session.
+- [x] Reject new Practice sessions before ranked sessions under pressure.
+- [x] Preserve admitted sessions while their reserved capacity remains.
+- [x] Return typed `CAPACITY_EXHAUSTED` failures with the expected UTC reset time.
+- [x] Confirm that no Cloudflare resource can automatically begin paid usage.
+- [x] Exercise quota and persistence-failure behavior in integration tests.
 
 ## 16. Private Alpha Readiness
 

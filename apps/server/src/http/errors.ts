@@ -9,6 +9,7 @@ export type TransportErrorCode =
   | "INVALID_ACTION"
   | "IDEMPOTENCY_CONFLICT"
   | "RATE_LIMITED"
+  | "CAPACITY_EXHAUSTED"
   | "REQUEST_TOO_LARGE"
   | "AUTH_REQUIRED"
   | "AUTH_UNAVAILABLE"
@@ -40,4 +41,16 @@ export function actionFailure(
     case "idempotency-conflict":
       return failure(context, 409, "IDEMPOTENCY_CONFLICT");
   }
+}
+
+/** Typed capacity failures always expose the UTC reset boundary, never quota internals. */
+export function capacityFailure(context: Context, resetAt: string) {
+  context.header(
+    "retry-after",
+    String(Math.max(1, Math.ceil((Date.parse(resetAt) - Date.now()) / 1000))),
+  );
+  return context.json(
+    { error: { code: "CAPACITY_EXHAUSTED", resetAt, requestId: context.get("requestId") } },
+    503,
+  );
 }

@@ -90,6 +90,25 @@ describe("D1 floor persistence", () => {
     });
     expect((await store.loadSnapshot("session-1"))?.version).toBe(0);
   });
+
+  test("leaves the event and snapshot untouched when the persistence batch fails", async () => {
+    const database = await seededDatabase();
+    database.failNextBatch = true;
+    const store = new D1FloorStore(database);
+    await expect(
+      store.commitAction({
+        floorSessionId: "session-1",
+        idempotencyKey: "persistence-failure",
+        expectedSnapshotVersion: 0,
+        action: { type: "move", direction: "east" },
+        now: "2026-10-18T00:00:00.000Z",
+      }),
+    ).rejects.toThrow("D1 unavailable");
+    expect(database.sqlite.query("SELECT count(*) AS count FROM events").get()).toEqual({
+      count: 0,
+    });
+    expect((await store.loadSnapshot("session-1"))?.version).toBe(0);
+  });
 });
 
 async function seededDatabase(): Promise<TestD1> {
@@ -142,6 +161,7 @@ type RunnableStatement = D1PreparedStatement & { run(): unknown };
 
 class TestD1 implements D1Database {
   readonly sqlite = new Database(":memory:");
+  failNextBatch = false;
 
   prepare(query: string): RunnableStatement {
     let values: unknown[] = [];
@@ -163,6 +183,10 @@ class TestD1 implements D1Database {
   }
 
   async batch(statements: D1PreparedStatement[]): Promise<Array<{ meta?: { changes?: number } }>> {
+    if (this.failNextBatch) {
+      this.failNextBatch = false;
+      throw new Error("D1 unavailable");
+    }
     return this.sqlite.transaction(() =>
       statements.map((statement) => {
         const result = (statement as RunnableStatement).run() as { changes?: number };

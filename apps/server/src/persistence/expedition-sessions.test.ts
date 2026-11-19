@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { createExpeditionRun, createRun, type RunDefinition, startFloor } from "@agentfall/engine";
-
+import { D1CapacityBudget, DAILY_CAPACITY } from "./capacity";
 import { D1ExpeditionSessions } from "./expedition-sessions";
 import type { D1Database, D1PreparedStatement } from "./floor-store";
 
@@ -31,6 +31,80 @@ const definition: RunDefinition = {
 };
 
 describe("expedition charges and sessions", () => {
+  test("reserves a conservative full-floor allowance and sheds practice before ranked", async () => {
+    const database = await databaseForSessions();
+    const capacity = new D1CapacityBudget(database);
+    const now = new Date("2026-10-20T12:00:00.000Z");
+    const day = now.toISOString().slice(0, 10);
+    database.sqlite
+      .query("INSERT INTO daily_capacity (day_utc, writes_reserved, updated_at) VALUES (?, ?, ?)")
+      .run(day, DAILY_CAPACITY.writes - DAILY_CAPACITY.rankedWriteHeadroom, now.toISOString());
+
+    await expect(capacity.reserve("practice-capacity", "practice", now)).resolves.toMatchObject({
+      accepted: false,
+      reason: "capacity-exhausted",
+      resetAt: "2026-10-21T00:00:00.000Z",
+    });
+    await expect(capacity.reserve("ranked-capacity", "ranked", now)).resolves.toEqual({
+      accepted: true,
+    });
+    expect(await capacity.usage(now)).toMatchObject({
+      writes_reserved: DAILY_CAPACITY.writes - DAILY_CAPACITY.rankedWriteHeadroom + 2_000,
+      ranked_writes_reserved: 2_000,
+    });
+  });
+
+  test("does not reserve capacity for a rejected no-charge or already-open start", async () => {
+    const database = await databaseForSessions();
+    const sessions = new D1ExpeditionSessions(database);
+    const now = new Date("2026-10-20T12:00:00.000Z");
+    await sessions.charges("account-1", now);
+    database.sqlite.query("UPDATE charges SET available = 0 WHERE account_id = ?").run("account-1");
+    await expect(
+      sessions.start({
+        accountId: "account-1",
+        runId: "ranked-run",
+        sessionId: "no-charge-session",
+        mode: "ranked",
+        floor: 1,
+        definition,
+        snapshot: validSnapshot(),
+        now,
+      }),
+    ).resolves.toEqual({ accepted: false, reason: "no-charge" });
+    expect(await new D1CapacityBudget(database).usage(now)).toBeNull();
+  });
+
+  test("fails closed when persisting an admission reservation fails", async () => {
+    const database = await databaseForSessions();
+    // The third capacity batch records the reservation after the conservative
+    // ledger increment, modelling an interrupted D1 write.
+    const sessions = new D1ExpeditionSessions(new FailingBatchD1(database, 3));
+    const now = new Date("2026-10-20T12:00:00.000Z");
+    await expect(
+      sessions.start({
+        accountId: "account-1",
+        runId: "practice-run",
+        sessionId: "persistence-failure-session",
+        mode: "practice",
+        floor: 1,
+        definition,
+        snapshot: validSnapshot(),
+        now,
+      }),
+    ).resolves.toEqual({
+      accepted: false,
+      reason: "capacity-exhausted",
+      resetAt: "2026-10-21T00:00:00.000Z",
+    });
+    expect(database.sqlite.query("SELECT count(*) AS count FROM floor_sessions").get()).toEqual({
+      count: 0,
+    });
+    expect(await new D1CapacityBudget(database).usage(now)).toMatchObject({
+      writes_reserved: DAILY_CAPACITY.perFloor.writes,
+    });
+  });
+
   test("regenerates lazily, pauses at cap, and consumes a ranked start exactly once", async () => {
     const database = await databaseForSessions();
     const sessions = new D1ExpeditionSessions(database);
@@ -217,6 +291,7 @@ async function databaseForSessions(): Promise<TestD1> {
     "0000_initial.sql",
     "0001_authentication.sql",
     "0002_expedition_sessions.sql",
+    "0006_capacity_safety.sql",
   ])
     database.sqlite.exec(
       await Bun.file(new URL(`../../migrations/${migration}`, import.meta.url)).text(),
@@ -270,5 +345,24 @@ class TestD1 implements D1Database {
         meta: { changes: ((statement as RunnableStatement).run() as { changes?: number }).changes },
       })),
     )();
+  }
+}
+
+class FailingBatchD1 implements D1Database {
+  private batches = 0;
+
+  constructor(
+    private readonly delegate: D1Database,
+    private readonly failingBatch: number,
+  ) {}
+
+  prepare(query: string) {
+    return this.delegate.prepare(query);
+  }
+
+  async batch(statements: D1PreparedStatement[]) {
+    this.batches += 1;
+    if (this.batches === this.failingBatch) throw new Error("D1 unavailable");
+    return this.delegate.batch(statements);
   }
 }

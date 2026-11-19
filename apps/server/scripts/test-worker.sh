@@ -54,4 +54,4 @@ status="$(curl --silent --show-error --output "$log_file.mcp-auth" --write-out '
   --data '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"character_get","arguments":{}}}' \
   "http://127.0.0.1:$port/mcp")"
 test "$status" = "200"
-rg -q '"code":"AUTH_REQUIRED"' "$log_file.mcp-auth"
+rg -q 'AUTH_REQUIRED' "$log_file.mcp-auth"

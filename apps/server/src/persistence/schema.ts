@@ -165,6 +165,27 @@ export const rateLimits = sqliteTable(
   (table) => [primaryKey({ columns: [table.scope, table.clientKey, table.windowStart] })],
 );
 
+export const dailyCapacity = sqliteTable("daily_capacity", {
+  dayUtc: text("day_utc").primaryKey(),
+  requestsReserved: integer("requests_reserved").notNull(),
+  readsReserved: integer("reads_reserved").notNull(),
+  writesReserved: integer("writes_reserved").notNull(),
+  rankedWritesReserved: integer("ranked_writes_reserved").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const dailyCapacityReservations = sqliteTable("daily_capacity_reservations", {
+  floorSessionId: text("floor_session_id").primaryKey(),
+  dayUtc: text("day_utc")
+    .notNull()
+    .references(() => dailyCapacity.dayUtc),
+  mode: text("mode", { enum: ["ranked", "practice"] }).notNull(),
+  requestsReserved: integer("requests_reserved").notNull(),
+  readsReserved: integer("reads_reserved").notNull(),
+  writesReserved: integer("writes_reserved").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
 export const journals = sqliteTable("journals", {
   id: text("id").primaryKey(),
   accountId: text("account_id")
