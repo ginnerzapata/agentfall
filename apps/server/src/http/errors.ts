@@ -15,6 +15,7 @@ export type TransportErrorCode =
   | "INVALID_DISPLAY_NAME"
   | "DISPLAY_NAME_TAKEN"
   | "ALREADY_ENROLLED"
+  | "INVALID_SEASON_TRANSITION"
   | "INTERNAL";
 
 export function failure(

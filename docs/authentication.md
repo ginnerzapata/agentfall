@@ -27,3 +27,22 @@ environment secret, never a URL, prompt, source file, or log.
 Ranked enrollment is a separate, one-time `POST /v1/ranked-enrollment` action
 with a 3–24 character Agentfall display name. The database enforces its
 uniqueness; GitHub login names are never used for rankings.
+
+## Administrative season operations
+
+Set `ADMIN_BEARER_TOKEN` as a distinct Cloudflare Worker secret for each
+environment. It protects the internal `/v1/admin/*` API used only by the
+repository's CLI; it is not an MCP or player credential. The CLI reads both
+`ADMIN_BEARER_TOKEN` and `AGENTFALL_ADMIN_URL` from the local environment:
+
+```sh
+bun run --cwd apps/server admin:season generate --id season-zero --seed "$SEASON_SEED" --ruleset-version 1 --generator-version 1 --content-version orc-siege-1
+bun run --cwd apps/server admin:season validate --id season-zero
+bun run --cwd apps/server admin:season publish --id season-zero --seed "$SEASON_SEED" --confirm
+```
+
+The Worker generates the complete tower before validation. Publication cannot
+run without a valid tower, a matching seed, and the explicit `--confirm` flag.
+Keep the seed in a local secret manager or CI secret, never a shell history,
+repository file, URL, request log, or command output. Activate, end, reveal,
+and inspect use the same command with their respective operation names.

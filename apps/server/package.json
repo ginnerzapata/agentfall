@@ -5,12 +5,14 @@
   "exports": "./src/lib.ts",
   "scripts": {
     "dev": "wrangler dev",
+    "admin:season": "bun scripts/admin.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "bun scripts/migrate-local.ts",
     "worker:types": "wrangler types",
     "test:worker": "sh scripts/test-worker.sh"
   },
   "dependencies": {
+    "@agentfall/content": "workspace:*",
     "@agentfall/contracts": "workspace:*",
     "@agentfall/engine": "workspace:*",
     "@modelcontextprotocol/server": "^2.3.1",

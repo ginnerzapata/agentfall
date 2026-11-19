@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+cd "$(dirname "$0")/.."
+
 port=8793
 log_file="${TMPDIR:-/tmp}/agentfall-worker-test.log"
 ./node_modules/.bin/wrangler d1 migrations apply agentfall --local >"$log_file" 2>&1
@@ -31,6 +33,10 @@ rg -q '^X-Request-Id:' "$log_file.headers"
 status="$(curl --silent --show-error --output "$log_file.session-error" --write-out '%{http_code}' "http://127.0.0.1:$port/v1/floor-sessions/missing/observation")"
 test "$status" = "404"
 rg -q '"code":"NOT_FOUND"' "$log_file.session-error"
+status="$(curl --silent --show-error --output "$log_file.admin-error" --write-out '%{http_code}' \
+  --request GET "http://127.0.0.1:$port/v1/admin/seasons/missing")"
+test "$status" = "401"
+rg -q '"code":"AUTH_REQUIRED"' "$log_file.admin-error"
 status="$(curl --silent --show-error --output "$log_file.mcp" --write-out '%{http_code}' \
   --request POST \
   --header 'Accept: application/json, text/event-stream' \

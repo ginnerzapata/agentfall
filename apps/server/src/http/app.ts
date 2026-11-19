@@ -2,11 +2,11 @@ import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
-
+import { adminAuthorized } from "../admin";
 import { FloorApplication } from "../application";
 import { type AuthConfiguration, AuthError, AuthenticationService } from "../auth";
 import { createAgentfallMcpHandler, D1McpGameplay } from "../mcp";
-import { D1FloorStore } from "../persistence";
+import { D1FloorStore, D1Seasons } from "../persistence";
 import { D1RateLimiter, type RateLimitScope } from "../rate-limit";
 import { actionFailure, failure } from "./errors";
 
@@ -16,6 +16,7 @@ type AuthBindings = {
   AGENTFALL_ORIGIN?: string;
   AUTH_STATE_SECRET?: string;
   CREDENTIAL_HASH_PEPPER?: string;
+  ADMIN_BEARER_TOKEN?: string;
 };
 type ServerEnv = { Bindings: Env & AuthBindings };
 const MAX_REQUEST_BYTES = 16 * 1024;
@@ -167,6 +168,49 @@ export function createHttpApp() {
     }
   });
 
+  app.post("/v1/admin/seasons", async (context) => {
+    if (!(await administrator(context))) return failure(context, 401, "AUTH_REQUIRED");
+    const input = await jsonObject(context);
+    if (
+      !input ||
+      !requiredString(input.id) ||
+      !requiredString(input.seed) ||
+      !requiredString(input.rulesetVersion) ||
+      !requiredString(input.generatorVersion) ||
+      !requiredString(input.contentVersion)
+    )
+      return failure(context, 400, "BAD_REQUEST");
+    const seasons = new D1Seasons(context.env.DB);
+    const now = new Date().toISOString();
+    const created = await seasons.createDraft({
+      id: input.id,
+      rulesetVersion: input.rulesetVersion,
+      generatorVersion: input.generatorVersion,
+      contentVersion: input.contentVersion,
+      now,
+    });
+    if (!created) return failure(context, 409, "INVALID_SEASON_TRANSITION");
+    const generated = await seasons.generateTower({ id: input.id, seed: input.seed, now });
+    if (!generated.accepted) return failure(context, 422, "INVALID_SEASON_TRANSITION");
+    return context.json(await seasons.inspect(input.id), 201);
+  });
+  app.get("/v1/admin/seasons/:seasonId", async (context) => {
+    if (!(await administrator(context))) return failure(context, 401, "AUTH_REQUIRED");
+    const season = await new D1Seasons(context.env.DB).inspect(context.req.param("seasonId"));
+    return season ? context.json(season) : failure(context, 404, "NOT_FOUND");
+  });
+  app.post("/v1/admin/seasons/:seasonId/validate", (context) =>
+    advanceSeason(context, "validated"),
+  );
+  app.post("/v1/admin/seasons/:seasonId/activate", (context) => advanceSeason(context, "active"));
+  app.post("/v1/admin/seasons/:seasonId/end", (context) => advanceSeason(context, "ended"));
+  app.post("/v1/admin/seasons/:seasonId/publish", (context) =>
+    advanceSeason(context, "published", true),
+  );
+  app.post("/v1/admin/seasons/:seasonId/reveal", (context) =>
+    advanceSeason(context, "revealed", false),
+  );
+
   app.get("/v1/floor-sessions/:floorSessionId/observation", async (context) => {
     const application = new FloorApplication(new D1FloorStore(context.env.DB));
     const result = await application.observe(context.req.param("floorSessionId"));
@@ -225,6 +269,9 @@ async function authenticatedAccount(context: Context<ServerEnv>) {
   const accountId = auth && token ? await auth.accountFromSession(token) : null;
   return auth && accountId ? { auth, accountId } : null;
 }
+async function administrator(context: Context<ServerEnv>) {
+  return adminAuthorized(context.req.header("authorization"), context.env.ADMIN_BEARER_TOKEN);
+}
 function authConfiguration(env: AuthBindings): AuthConfiguration | null {
   const {
     GITHUB_CLIENT_ID,
@@ -266,7 +313,7 @@ async function jsonObject(context: { req: { json(): Promise<unknown> } }) {
   try {
     const value = await context.req.json();
     return value !== null && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, string | undefined>)
+      ? (value as Record<string, unknown>)
       : null;
   } catch {
     return null;
@@ -274,6 +321,32 @@ async function jsonObject(context: { req: { json(): Promise<unknown> } }) {
 }
 function optionalString(value: unknown): value is string | undefined {
   return value === undefined || (typeof value === "string" && value.length <= 100);
+}
+function requiredString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 200;
+}
+
+async function advanceSeason(
+  context: Context<ServerEnv>,
+  to: "validated" | "published" | "active" | "ended" | "revealed",
+  needsConfirmation = false,
+) {
+  if (!(await administrator(context))) return failure(context, 401, "AUTH_REQUIRED");
+  let input: Record<string, unknown> | null = null;
+  if (to === "published" || to === "revealed") {
+    input = await jsonObject(context);
+    if (!input || !requiredString(input.seed)) return failure(context, 400, "BAD_REQUEST");
+  }
+  if (needsConfirmation && input?.confirm !== true) return failure(context, 400, "BAD_REQUEST");
+  const result = await new D1Seasons(context.env.DB).advance({
+    id: context.req.param("seasonId"),
+    to,
+    now: new Date().toISOString(),
+    ...(input && requiredString(input.seed) ? { seed: input.seed } : {}),
+  });
+  return result.accepted
+    ? context.json(result)
+    : failure(context, result.reason === "not-found" ? 404 : 409, "INVALID_SEASON_TRANSITION");
 }
 function loginPage(configured: boolean) {
   return `<!doctype html><title>Agentfall sign in</title><main><h1>Agentfall</h1>${configured ? '<a href="/auth/github">Continue with GitHub</a>' : "<p>Authentication is not configured for this environment.</p>"}</main>`;

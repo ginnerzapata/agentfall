@@ -242,23 +242,23 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 ## 14. Seasons, Rankings, and Replay Visibility
 
-- [ ] Implement the complete season lifecycle and legal transitions.
-- [ ] Generate the full tower before publishing a season.
-- [ ] Publish a cryptographic seed commitment.
-- [ ] Keep the seed secret while the season is active.
-- [ ] Reveal and verify the seed after the season ends.
-- [ ] Freeze ruleset and content versions for active Runs.
-- [ ] Rank seasonal bests by the PRD's five ordered criteria.
-- [ ] Display current living-character progress separately from seasonal best.
-- [ ] Hide replay details for floors the viewer has not completed.
-- [ ] Reveal eligible seasonal information after the season ends.
-- [ ] Reset seasonal characters and tactical Journal data while preserving allowed history.
+- [x] Implement the complete season lifecycle and legal transitions.
+- [x] Generate the full tower before publishing a season.
+- [x] Publish a cryptographic seed commitment.
+- [x] Keep the seed secret while the season is active.
+- [x] Reveal and verify the seed after the season ends.
+- [x] Freeze ruleset and content versions for active Runs.
+- [x] Rank seasonal bests by the PRD's five ordered criteria.
+- [x] Display current living-character progress separately from seasonal best.
+- [x] Hide replay details for floors the viewer has not completed.
+- [x] Reveal eligible seasonal information after the season ends.
+- [x] Reset seasonal characters and tactical Journal data while preserving allowed history.
 
 ## 15. Administration and Capacity Safety
 
-- [ ] Build authenticated CLI commands to generate, validate, publish, activate, end, and reveal a season.
-- [ ] Require explicit confirmation and successful validation before publication.
-- [ ] Keep administrative secrets outside the repository.
+- [x] Build authenticated CLI commands to generate, validate, publish, activate, end, and reveal a season.
+- [x] Require explicit confirmation and successful validation before publication.
+- [x] Keep administrative secrets outside the repository.
 - [ ] Define an internal daily read/write/request budget below free-tier quotas.
 - [ ] Reserve conservative write capacity before admitting a floor session.
 - [ ] Reject new Practice sessions before ranked sessions under pressure.

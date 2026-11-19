@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   index,
   integer,
@@ -35,21 +36,26 @@ export const credentials = sqliteTable("credentials", {
   ...timestamps,
 });
 
-export const seasons = sqliteTable("seasons", {
-  id: text("id").primaryKey(),
-  state: text("state", {
-    enum: ["draft", "generated", "validated", "published", "active", "ended", "revealed"],
-  }).notNull(),
-  rulesetVersion: text("ruleset_version").notNull(),
-  generatorVersion: text("generator_version").notNull(),
-  contentVersion: text("content_version").notNull(),
-  seedCommitment: text("seed_commitment"),
-  revealedSeed: text("revealed_seed"),
-  retentionState: text("retention_state", { enum: ["active", "historical", "compacted"] })
-    .notNull()
-    .default("active"),
-  ...timestamps,
-});
+export const seasons = sqliteTable(
+  "seasons",
+  {
+    id: text("id").primaryKey(),
+    state: text("state", {
+      enum: ["draft", "generated", "validated", "published", "active", "ended", "revealed"],
+    }).notNull(),
+    rulesetVersion: text("ruleset_version").notNull(),
+    generatorVersion: text("generator_version").notNull(),
+    contentVersion: text("content_version").notNull(),
+    seedCommitment: text("seed_commitment"),
+    revealedSeed: text("revealed_seed"),
+    towerJson: text("tower_json"),
+    retentionState: text("retention_state", { enum: ["active", "historical", "compacted"] })
+      .notNull()
+      .default("active"),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex("seasons_one_active").on(table.state).where(sql`state = 'active'`)],
+);
 
 export const characters = sqliteTable(
   "characters",
