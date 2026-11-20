@@ -130,14 +130,39 @@ export class AuthenticationService {
     credentialId: string,
     input: { label?: string; expiresAt?: string } = {},
   ) {
-    const existing = await this.database
-      .prepare("SELECT id FROM credentials WHERE id = ? AND account_id = ? AND revoked_at IS NULL")
-      .bind(credentialId, accountId)
-      .first<{ id: string }>();
-    if (!existing) return null;
-    const issued = await this.createCredential(accountId, input);
-    await this.revokeCredential(accountId, credentialId);
-    return issued;
+    const expiresAt = validateExpiry(input.expiresAt);
+    const now = new Date().toISOString();
+    const token = `${credentialPrefix}${randomBase64Url(32)}`;
+    const id = crypto.randomUUID();
+    const label = input.label?.trim() || null;
+    const result = await this.database.batch([
+      this.database
+        .prepare(
+          `INSERT INTO credentials (id, account_id, token_hash, label, expires_at, created_at, updated_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?
+           WHERE EXISTS (
+             SELECT 1 FROM credentials WHERE id = ? AND account_id = ? AND revoked_at IS NULL
+           )`,
+        )
+        .bind(
+          id,
+          accountId,
+          await credentialHash(token, this.configuration.credentialHashPepper),
+          label,
+          expiresAt,
+          now,
+          now,
+          credentialId,
+          accountId,
+        ),
+      this.database
+        .prepare(
+          "UPDATE credentials SET revoked_at = ?, updated_at = ? WHERE id = ? AND account_id = ? AND revoked_at IS NULL",
+        )
+        .bind(now, now, credentialId, accountId),
+    ]);
+    if ((result[0]?.meta?.changes ?? 0) !== 1) return null;
+    return { credential: { id, label, expiresAt, createdAt: now }, token };
   }
 
   async enrollRanked(accountId: string, displayName: string) {

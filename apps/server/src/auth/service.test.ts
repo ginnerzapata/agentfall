@@ -33,6 +33,30 @@ describe("authentication credentials", () => {
     expect(await service.revokeCredential("account-1", issued.credential.id)).toBe(false);
   });
 
+  test("rotates credentials atomically, leaving only the replacement active", async () => {
+    const database = await seededDatabase();
+    const service = new AuthenticationService(database, configuration);
+    const original = await service.createCredential("account-1", { label: "old" });
+
+    const replacement = await service.rotateCredential("account-1", original.credential.id, {
+      label: "new",
+    });
+
+    expect(replacement).toMatchObject({ credential: { label: "new" }, token: expect.any(String) });
+    expect(
+      database.sqlite
+        .query(
+          "SELECT COUNT(*) AS count FROM credentials WHERE account_id = ? AND revoked_at IS NULL",
+        )
+        .get("account-1"),
+    ).toEqual({ count: 1 });
+    expect(
+      database.sqlite
+        .query("SELECT revoked_at FROM credentials WHERE id = ?")
+        .get(original.credential.id),
+    ).toMatchObject({ revoked_at: expect.any(String) });
+  });
+
   test("makes ranked enrollment one-time and gives display names a database-backed uniqueness rule", async () => {
     const database = await seededDatabase();
     const service = new AuthenticationService(database, configuration);

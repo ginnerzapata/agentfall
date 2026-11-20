@@ -33,6 +33,10 @@ rg -q '^X-Request-Id:' "$log_file.headers"
 status="$(curl --silent --show-error --output "$log_file.session-error" --write-out '%{http_code}' "http://127.0.0.1:$port/v1/floor-sessions/missing/observation")"
 test "$status" = "404"
 rg -q '"code":"NOT_FOUND"' "$log_file.session-error"
+status="$(curl --silent --show-error --output "$log_file.session-action-error" --write-out '%{http_code}' \
+  --request POST "http://127.0.0.1:$port/v1/floor-sessions/missing/actions")"
+test "$status" = "404"
+rg -q '"code":"NOT_FOUND"' "$log_file.session-action-error"
 status="$(curl --silent --show-error --output "$log_file.admin-error" --write-out '%{http_code}' \
   --request GET "http://127.0.0.1:$port/v1/admin/seasons/missing")"
 test "$status" = "401"

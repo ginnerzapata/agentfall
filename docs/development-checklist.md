@@ -272,7 +272,7 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 ## 16. Private Alpha Readiness
 
-- [ ] Perform a security review of authentication, credentials, hidden state, administrative endpoints, and logs.
+- [x] Perform a security review of authentication, credentials, hidden state, administrative endpoints, and logs ([private-alpha review](security-review-private-alpha.md)).
 - [ ] Perform deterministic replay audits against Season Zero fixtures.
 - [ ] Run class and encounter balance simulations.
 - [ ] Test disconnect, retry, stale version, timeout, collapse, death, and quota scenarios.

@@ -3,12 +3,11 @@ import { bodyLimit } from "hono/body-limit";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
 import { adminAuthorized } from "../admin";
-import { FloorApplication } from "../application";
 import { type AuthConfiguration, AuthError, AuthenticationService } from "../auth";
 import { createAgentfallMcpHandler, D1McpGameplay } from "../mcp";
-import { D1FloorStore, D1Seasons } from "../persistence";
+import { D1Seasons } from "../persistence";
 import { D1RateLimiter, type RateLimitScope } from "../rate-limit";
-import { actionFailure, failure } from "./errors";
+import { failure } from "./errors";
 
 type AuthBindings = {
   GITHUB_CLIENT_ID?: string;
@@ -32,11 +31,24 @@ export function createHttpApp() {
       onError: (context) => failure(context, 413, "REQUEST_TOO_LARGE"),
     }),
   );
+  app.use(
+    "/mcp",
+    bodyLimit({
+      maxSize: MAX_REQUEST_BYTES,
+      onError: (context) => failure(context, 413, "REQUEST_TOO_LARGE"),
+    }),
+  );
   app.use("/v1/*", async (context, next) => {
     const scope: RateLimitScope =
       context.req.method === "GET" ? "request" : "active-floor-mutation";
     const identity = context.req.header("cf-connecting-ip") ?? "anonymous";
     const allowed = await new D1RateLimiter(context.env.DB).allow(scope, identity, Date.now());
+    if (!allowed) return failure(context, 429, "RATE_LIMITED");
+    await next();
+  });
+  app.use("/mcp", async (context, next) => {
+    const identity = context.req.header("cf-connecting-ip") ?? "anonymous";
+    const allowed = await new D1RateLimiter(context.env.DB).allow("request", identity, Date.now());
     if (!allowed) return failure(context, 429, "RATE_LIMITED");
     await next();
   });
@@ -211,47 +223,13 @@ export function createHttpApp() {
     advanceSeason(context, "revealed", false),
   );
 
-  app.get("/v1/floor-sessions/:floorSessionId/observation", async (context) => {
-    const application = new FloorApplication(new D1FloorStore(context.env.DB));
-    const result = await application.observe(context.req.param("floorSessionId"));
-    if (!result.accepted) return failure(context, 404, "NOT_FOUND");
-    return context.json(result);
-  });
-  app.post("/v1/floor-sessions/:floorSessionId/actions", async (context) => {
-    const idempotencyKey = context.req.header("idempotency-key");
-    const expectedSnapshotVersion = Number(context.req.header("snapshot-version"));
-    if (
-      !idempotencyKey ||
-      !Number.isSafeInteger(expectedSnapshotVersion) ||
-      expectedSnapshotVersion < 0
-    )
-      return failure(context, 400, "BAD_REQUEST");
-    let action: unknown;
-    try {
-      action = await context.req.json();
-    } catch {
-      return failure(context, 400, "BAD_REQUEST");
-    }
-    if (!isAction(action)) return failure(context, 400, "BAD_REQUEST");
-    const application = new FloorApplication(new D1FloorStore(context.env.DB));
-    const result = await application.submitAction({
-      floorSessionId: context.req.param("floorSessionId"),
-      idempotencyKey,
-      expectedSnapshotVersion,
-      action,
-      now: new Date().toISOString(),
-    });
-    if (!result.accepted) return actionFailure(context, result);
-    return context.json(result, result.replayed ? 200 : 201);
-  });
-
   app.notFound((context) => failure(context, 404, "NOT_FOUND"));
   app.onError((error, context) => {
     console.error(
       JSON.stringify({
         event: "http_error",
         requestId: context.get("requestId"),
-        message: error.message,
+        errorType: error instanceof Error ? error.name : "unknown",
       }),
     );
     return failure(context, 500, "INTERNAL");
@@ -353,43 +331,4 @@ function loginPage(configured: boolean) {
 }
 function credentialPortalPage() {
   return "<!doctype html><title>Agentfall credentials</title><main><h1>Signed in</h1><p>Create a bearer credential through the credential API, then keep it in your MCP client’s secret environment configuration. Credentials are shown only when created or rotated.</p></main>";
-}
-
-function isAction(value: unknown): value is import("@agentfall/contracts").Action {
-  if (value === null || typeof value !== "object" || !("type" in value)) return false;
-  const action = value as Record<string, unknown>;
-  switch (action.type) {
-    case "move":
-    case "scout":
-      return isDirection(action.direction);
-    case "attack":
-    case "shove":
-    case "disengaging-shot":
-    case "arc-bolt":
-      return typeof action.targetId === "string" && action.targetId.length > 0;
-    case "interact":
-    case "open-door":
-    case "close-door":
-      return isPosition(action.target);
-    case "drop-item":
-      return (
-        typeof action.slot === "number" && Number.isSafeInteger(action.slot) && action.slot >= 0
-      );
-    case "guard":
-    case "ward":
-    case "end-turn":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function isDirection(value: unknown): boolean {
-  return value === "north" || value === "east" || value === "south" || value === "west";
-}
-
-function isPosition(value: unknown): boolean {
-  if (value === null || typeof value !== "object") return false;
-  const position = value as Record<string, unknown>;
-  return Number.isSafeInteger(position.x) && Number.isSafeInteger(position.y);
 }
