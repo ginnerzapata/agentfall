@@ -5,7 +5,7 @@ import { type D1Database, D1ExpeditionSessions, D1FloorStore } from "../persiste
 import type { McpGameplay } from "./server";
 
 type CredentialRow = { account_id: string };
-type SessionOwnerRow = { id: string };
+type SessionOwnerRow = { status: string; expires_at: string };
 type CharacterRow = { id: string; sequence: number; status: string; state_json: string };
 type JournalRow = { id: string; kind: string; payload_json: string; created_at: string };
 type SeasonRow = {
@@ -41,14 +41,13 @@ export class D1McpGameplay implements McpGameplay {
   }
 
   async observeFloor(input: { floorSessionId: string }): Promise<Record<string, unknown>> {
-    const accountId = await this.accountId();
-    if (!(await this.ownsSession(accountId, input.floorSessionId))) return { code: "NOT_FOUND" };
-    const sessions = new D1ExpeditionSessions(this.database);
-    const now = new Date();
-    await sessions.pauseIdle(now);
-    const resume = await sessions.resume(accountId, input.floorSessionId, now);
-    if (resume === "expired") return { code: "SESSION_EXPIRED" };
-    if (resume === "not-found") return { code: "SESSION_UNAVAILABLE" };
+    const accountId = await this.accountId(false);
+    const session = await this.session(accountId, input.floorSessionId);
+    if (!session) return { code: "NOT_FOUND" };
+    if (session.expires_at <= new Date().toISOString() || session.status === "expired")
+      return { code: "SESSION_EXPIRED" };
+    if (session.status !== "active" && session.status !== "paused")
+      return { code: "SESSION_UNAVAILABLE" };
     const result = await new FloorApplication(new D1FloorStore(this.database)).observe(
       input.floorSessionId,
     );
@@ -87,7 +86,7 @@ export class D1McpGameplay implements McpGameplay {
   }
 
   async currentCharacter(): Promise<Record<string, unknown>> {
-    const accountId = await this.accountId();
+    const accountId = await this.accountId(false);
     const character = await this.database
       .prepare(
         `SELECT id, sequence, status, state_json FROM characters
@@ -100,7 +99,7 @@ export class D1McpGameplay implements McpGameplay {
   }
 
   async journal(input: { limit: number }): Promise<Record<string, unknown>> {
-    const accountId = await this.accountId();
+    const accountId = await this.accountId(false);
     const rows = await this.database
       .prepare(
         `SELECT id, kind, payload_json, created_at FROM journals
@@ -127,7 +126,7 @@ export class D1McpGameplay implements McpGameplay {
   }
 
   async season(input: { seasonId?: string }): Promise<Record<string, unknown>> {
-    await this.accountId();
+    await this.accountId(false);
     const season = input.seasonId
       ? await this.database
           .prepare(
@@ -156,7 +155,7 @@ export class D1McpGameplay implements McpGameplay {
   }
 
   async standings(input: { seasonId?: string; limit: number }): Promise<Record<string, unknown>> {
-    await this.accountId();
+    await this.accountId(false);
     const seasonId = input.seasonId ?? (await this.activeSeasonId());
     if (!seasonId) return { code: "NOT_FOUND" };
     const rows = await this.database
@@ -186,7 +185,7 @@ export class D1McpGameplay implements McpGameplay {
     };
   }
 
-  private async accountId(): Promise<string> {
+  private async accountId(touchCredential = true): Promise<string> {
     const token = bearerToken(this.authorization);
     if (!token) throw new McpAuthenticationError();
     const tokenHash = await credentialHash(token, this.credentialHashPepper);
@@ -199,26 +198,33 @@ export class D1McpGameplay implements McpGameplay {
       .bind(tokenHash, new Date().toISOString())
       .first<CredentialRow>();
     if (!credential) throw new McpAuthenticationError();
-    await this.database.batch([
-      this.database
-        .prepare(
-          "UPDATE credentials SET last_used_at = ?, updated_at = ? WHERE id = (SELECT id FROM credentials WHERE token_hash = ? AND revoked_at IS NULL)",
-        )
-        .bind(new Date().toISOString(), new Date().toISOString(), tokenHash),
-    ]);
+    if (touchCredential)
+      await this.database.batch([
+        this.database
+          .prepare(
+            "UPDATE credentials SET last_used_at = ?, updated_at = ? WHERE id = (SELECT id FROM credentials WHERE token_hash = ? AND revoked_at IS NULL)",
+          )
+          .bind(new Date().toISOString(), new Date().toISOString(), tokenHash),
+      ]);
     return credential.account_id;
   }
 
-  private async ownsSession(accountId: string, floorSessionId: string): Promise<boolean> {
-    const session = await this.database
+  private async session(
+    accountId: string,
+    floorSessionId: string,
+  ): Promise<SessionOwnerRow | null> {
+    return this.database
       .prepare(
-        `SELECT floor_sessions.id FROM floor_sessions
+        `SELECT floor_sessions.status, floor_sessions.expires_at FROM floor_sessions
          JOIN runs ON runs.id = floor_sessions.run_id
          WHERE floor_sessions.id = ? AND runs.account_id = ?`,
       )
       .bind(floorSessionId, accountId)
       .first<SessionOwnerRow>();
-    return session !== null;
+  }
+
+  private async ownsSession(accountId: string, floorSessionId: string): Promise<boolean> {
+    return (await this.session(accountId, floorSessionId)) !== null;
   }
 
   private async activeSeasonId(): Promise<string | null> {
