@@ -15,9 +15,11 @@ accumulating a project history; Git preserves the full history.
 - Blocker: <none, or one concrete decision/access need>
 ```
 
-## Current baseline
+## Current handoff
 
-- Verified: repository baseline recorded in `docs/development-checklist.md`
-- Commit: `f2a92da` — Complete private alpha security review
+### #32 — complete
+
+- Verified: `bun test apps/server/src/mcp/server.test.ts`, `bun run typecheck` — pass
+- Commit: `1d6e9d1` — Complete read-only MCP gameplay tools
 - Next: #33 — implement mutating MCP tools with idempotency and rollback semantics
 - Blocker: none
