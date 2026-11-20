@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { D1Database, D1PreparedStatement } from "../persistence";
 import { D1McpGameplay } from "./gameplay";
-import { createAgentfallMcpHandler } from "./server";
+import { createAgentfallMcpHandler, type McpGameplay } from "./server";
 
 test("the stateless handler advertises the compact, annotated gameplay tools", async () => {
   const handler = createAgentfallMcpHandler();
@@ -46,17 +46,57 @@ test("unauthenticated tool calls reveal no game state", async () => {
   expect(response.result.isError).toBe(true);
 });
 
+test("read-only tools validate inputs and return the supplied safe result", async () => {
+  const gameplay: McpGameplay = {
+    startFloor: async () => ({}),
+    observeFloor: async () => ({}),
+    submitAction: async () => ({}),
+    currentCharacter: async () => ({ schemaVersion: 1, status: "living" }),
+    journal: async () => ({}),
+    abandonFloor: async () => ({}),
+    endFloor: async () => ({}),
+    season: async () => ({}),
+    standings: async () => ({}),
+  };
+  const handler = createAgentfallMcpHandler(gameplay);
+  const valid = await request(handler, 3, "tools/call", { name: "character_get", arguments: {} });
+  expect(valid.result.structuredContent).toEqual({ schemaVersion: 1, status: "living" });
+
+  const malformed = await request(handler, 4, "tools/call", {
+    name: "journal_get",
+    arguments: { limit: 0 },
+  });
+  expect(malformed.result.isError).toBe(true);
+});
+
 test("read-only gameplay operations do not write credentials, sessions, or snapshots", async () => {
   const database = new ReadOnlyD1();
   const gameplay = new D1McpGameplay(database, "Bearer safe-test-token");
 
   expect(await gameplay.observeFloor({ floorSessionId: "session-1" })).toMatchObject({
     code: "NOT_FOUND",
+    schemaVersion: 1,
   });
-  expect(await gameplay.currentCharacter()).toMatchObject({ id: "character-1" });
-  expect(await gameplay.journal({ limit: 25 })).toEqual({ entries: [] });
-  expect(await gameplay.season({})).toMatchObject({ id: "season-1", state: "active" });
-  expect(await gameplay.standings({ limit: 25 })).toEqual({ seasonId: "season-1", entries: [] });
+  expect(await gameplay.currentCharacter()).toMatchObject({ id: "character-1", schemaVersion: 1 });
+  expect(await gameplay.journal({ limit: 25 })).toEqual({ entries: [], schemaVersion: 1 });
+  const activeSeason = await gameplay.season({});
+  expect(activeSeason).toMatchObject({ id: "season-1", state: "active" });
+  expect(activeSeason).not.toHaveProperty("seed");
+  expect(await gameplay.standings({ limit: 25 })).toEqual({
+    schemaVersion: 1,
+    seasonId: "season-1",
+    entries: [
+      {
+        rank: 1,
+        displayName: "Vanguard",
+        bestFloor: 3,
+        bossesDefeated: 0,
+        characterDeaths: 1,
+        floorTurns: 40,
+        achievedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  });
   expect(database.batchCalls).toBe(0);
 });
 
@@ -105,7 +145,21 @@ class ReadOnlyD1 implements D1Database {
     const statement = {
       bind: () => statement,
       first: async <T>() => row as T | null,
-      all: async <T>() => ({ results: [] as T[] }),
+      all: async <T>() => ({
+        results: (query.includes("FROM standings")
+          ? [
+              {
+                account_id: "private-account-id",
+                display_name: "Vanguard",
+                best_floor: 3,
+                bosses_defeated: 0,
+                character_deaths: 1,
+                floor_turns: 40,
+                achieved_at: "2026-01-01T00:00:00.000Z",
+              },
+            ]
+          : []) as T[],
+      }),
     };
     return statement;
   }

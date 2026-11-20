@@ -1,3 +1,10 @@
+import {
+  McpCharacterInputSchema,
+  McpJournalInputSchema,
+  McpObservationInputSchema,
+  McpSeasonInputSchema,
+  McpStandingsInputSchema,
+} from "@agentfall/contracts";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
@@ -73,7 +80,7 @@ function createServer(gameplay: McpGameplay) {
     "floor_observation",
     {
       description: "Read the safe current floor view.",
-      inputSchema: z.object({ floorSessionId }),
+      inputSchema: McpObservationInputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false },
     },
     async (input) => invoke(gameplay.observeFloor(input)),
@@ -94,14 +101,18 @@ function createServer(gameplay: McpGameplay) {
   );
   server.registerTool(
     "character_get",
-    { description: "Read the current character.", annotations: { readOnlyHint: true } },
+    {
+      description: "Read the current character.",
+      inputSchema: McpCharacterInputSchema,
+      annotations: { readOnlyHint: true },
+    },
     async () => invoke(gameplay.currentCharacter()),
   );
   server.registerTool(
     "journal_get",
     {
       description: "Read private Journal entries.",
-      inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(25) }),
+      inputSchema: McpJournalInputSchema,
       annotations: { readOnlyHint: true },
     },
     async (input) => invoke(gameplay.journal(input)),
@@ -128,7 +139,7 @@ function createServer(gameplay: McpGameplay) {
     "season_get",
     {
       description: "Read public season details.",
-      inputSchema: z.object({ seasonId: z.string().min(1).max(128).optional() }),
+      inputSchema: McpSeasonInputSchema,
       annotations: { readOnlyHint: true },
     },
     async (input) => invoke(gameplay.season(input)),
@@ -137,10 +148,7 @@ function createServer(gameplay: McpGameplay) {
     "standings_get",
     {
       description: "Read season standings.",
-      inputSchema: z.object({
-        seasonId: z.string().min(1).max(128).optional(),
-        limit: z.number().int().min(1).max(100).default(25),
-      }),
+      inputSchema: McpStandingsInputSchema,
       annotations: { readOnlyHint: true },
     },
     async (input) => invoke(gameplay.standings(input)),

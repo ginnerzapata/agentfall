@@ -1,3 +1,4 @@
+import { MCP_READ_SCHEMA_VERSION, McpReadResultSchema } from "@agentfall/contracts";
 import { observe } from "@agentfall/engine";
 import { FloorApplication } from "../application";
 import { credentialHash } from "../auth";
@@ -43,16 +44,16 @@ export class D1McpGameplay implements McpGameplay {
   async observeFloor(input: { floorSessionId: string }): Promise<Record<string, unknown>> {
     const accountId = await this.accountId(false);
     const session = await this.session(accountId, input.floorSessionId);
-    if (!session) return { code: "NOT_FOUND" };
+    if (!session) return readResult({ code: "NOT_FOUND" });
     if (session.expires_at <= new Date().toISOString() || session.status === "expired")
-      return { code: "SESSION_EXPIRED" };
+      return readResult({ code: "SESSION_EXPIRED" });
     if (session.status !== "active" && session.status !== "paused")
-      return { code: "SESSION_UNAVAILABLE" };
+      return readResult({ code: "SESSION_UNAVAILABLE" });
     const result = await new FloorApplication(new D1FloorStore(this.database)).observe(
       input.floorSessionId,
     );
-    if (!result.accepted) return { code: "NOT_FOUND" };
-    return { snapshotVersion: result.snapshotVersion, observation: result.observation };
+    if (!result.accepted) return readResult({ code: "NOT_FOUND" });
+    return readResult({ snapshotVersion: result.snapshotVersion, observation: result.observation });
   }
 
   async submitAction(input: {
@@ -94,8 +95,8 @@ export class D1McpGameplay implements McpGameplay {
       )
       .bind(accountId)
       .first<CharacterRow>();
-    if (!character) return { code: "NOT_FOUND" };
-    return characterView(character);
+    if (!character) return readResult({ code: "NOT_FOUND" });
+    return readResult(characterView(character));
   }
 
   async journal(input: { limit: number }): Promise<Record<string, unknown>> {
@@ -107,12 +108,12 @@ export class D1McpGameplay implements McpGameplay {
       )
       .bind(accountId, input.limit)
       .all<JournalRow>();
-    return {
+    return readResult({
       entries: rows.results.flatMap((row) => {
         const payload = journalPayload(row.kind, row.payload_json);
         return payload ? [{ id: row.id, kind: row.kind, payload, createdAt: row.created_at }] : [];
       }),
-    };
+    });
   }
 
   async abandonFloor(): Promise<Record<string, unknown>> {
@@ -142,8 +143,8 @@ export class D1McpGameplay implements McpGameplay {
              WHERE state = 'active' ORDER BY created_at DESC LIMIT 1`,
           )
           .first<SeasonRow>();
-    if (!season) return { code: "NOT_FOUND" };
-    return {
+    if (!season) return readResult({ code: "NOT_FOUND" });
+    return readResult({
       id: season.id,
       state: season.state,
       rulesetVersion: season.ruleset_version,
@@ -151,13 +152,13 @@ export class D1McpGameplay implements McpGameplay {
       contentVersion: season.content_version,
       seedCommitment: season.seed_commitment,
       ...(season.state === "revealed" ? { seed: season.revealed_seed } : {}),
-    };
+    });
   }
 
   async standings(input: { seasonId?: string; limit: number }): Promise<Record<string, unknown>> {
     await this.accountId(false);
     const seasonId = input.seasonId ?? (await this.activeSeasonId());
-    if (!seasonId) return { code: "NOT_FOUND" };
+    if (!seasonId) return readResult({ code: "NOT_FOUND" });
     const rows = await this.database
       .prepare(
         `SELECT standings.account_id, accounts.display_name, standings.best_floor,
@@ -170,11 +171,10 @@ export class D1McpGameplay implements McpGameplay {
       )
       .bind(seasonId, input.limit)
       .all<StandingRow>();
-    return {
+    return readResult({
       seasonId,
       entries: rows.results.map((row, index) => ({
         rank: index + 1,
-        accountId: row.account_id,
         displayName: row.display_name,
         bestFloor: row.best_floor,
         bossesDefeated: row.bosses_defeated,
@@ -182,7 +182,7 @@ export class D1McpGameplay implements McpGameplay {
         floorTurns: row.floor_turns,
         achievedAt: row.achieved_at,
       })),
-    };
+    });
   }
 
   private async accountId(touchCredential = true): Promise<string> {
@@ -244,6 +244,10 @@ export class McpAuthenticationError extends Error {
 function bearerToken(authorization: string | undefined): string | null {
   const match = authorization?.match(/^Bearer ([^\s]+)$/i);
   return match?.[1] ?? null;
+}
+
+function readResult(data: Record<string, unknown>): Record<string, unknown> {
+  return McpReadResultSchema.parse({ schemaVersion: MCP_READ_SCHEMA_VERSION, ...data });
 }
 
 function characterView(row: CharacterRow): Record<string, unknown> {

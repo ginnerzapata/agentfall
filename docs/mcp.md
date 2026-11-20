@@ -58,3 +58,10 @@ substitution:
 
 Both clients use standard HTTP MCP; neither needs a local gameplay UI or an
 Agentfall-held model credential.
+
+## Read-only tool example
+
+After connecting, ask the client to call `season_get`, then `character_get` and
+`floor_observation` with the floor-session ID returned by `floor_start`. Read
+results include `schemaVersion: 1`; treat the structured result as authoritative
+and never infer hidden tiles, entities, or future RNG from omitted fields.

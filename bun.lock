@@ -13,6 +13,7 @@
     "apps/server": {
       "name": "@agentfall/server",
       "dependencies": {
+        "@agentfall/content": "workspace:*",
         "@agentfall/contracts": "workspace:*",
         "@agentfall/engine": "workspace:*",
         "@modelcontextprotocol/server": "^2.3.1",
@@ -33,6 +34,9 @@
     },
     "packages/contracts": {
       "name": "@agentfall/contracts",
+      "dependencies": {
+        "zod": "^4.6.7",
+      },
     },
     "packages/engine": {
       "name": "@agentfall/engine",

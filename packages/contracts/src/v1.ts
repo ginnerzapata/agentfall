@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 // These versions describe serialized values, not the contracts package version.
 export const SNAPSHOT_SCHEMA_VERSION = 10;
 export const ENGINE_EVENT_SCHEMA_VERSION = 10;
@@ -27,6 +29,29 @@ export const SCOUT_RANGE = 8;
 export const BACKPACK_SLOT_COUNT = 4;
 /** Version of serialized authored and generated floor content. */
 export const FLOOR_CONTENT_SCHEMA_VERSION = 1;
+/** Version of transport-safe, read-only MCP request and response values. */
+export const MCP_READ_SCHEMA_VERSION = 1;
+
+const mcpId = z.string().min(1).max(128);
+
+/** Public MCP input schemas are owned by contracts rather than a transport adapter. */
+export const McpObservationInputSchema = z.object({ floorSessionId: mcpId });
+export const McpCharacterInputSchema = z.object({});
+export const McpJournalInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(25),
+});
+export const McpSeasonInputSchema = z.object({ seasonId: mcpId.optional() });
+export const McpStandingsInputSchema = z.object({
+  seasonId: mcpId.optional(),
+  limit: z.number().int().min(1).max(100).default(25),
+});
+
+/** Every read result carries an independently versioned transport schema marker. */
+export const McpReadResultSchema = z
+  .object({
+    schemaVersion: z.literal(MCP_READ_SCHEMA_VERSION),
+  })
+  .passthrough();
 
 export function canonicalStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
