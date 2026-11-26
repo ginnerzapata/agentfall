@@ -36,6 +36,12 @@ export type CommitActionInput = {
   expectedSnapshotVersion: number;
   action: Action;
   now: string;
+  turnBudget?: number;
+  extraStatements?: (committed: {
+    version: number;
+    snapshot: Snapshot;
+    event: EngineEvent;
+  }) => D1PreparedStatement[];
 };
 
 export type CommitActionResult =
@@ -43,7 +49,12 @@ export type CommitActionResult =
   | { accepted: true; replayed: true; version: number; snapshot: Snapshot; event: EngineEvent }
   | {
       accepted: false;
-      reason: "stale-snapshot" | "invalid-action" | "idempotency-conflict" | "not-found";
+      reason:
+        | "stale-snapshot"
+        | "invalid-action"
+        | "idempotency-conflict"
+        | "not-found"
+        | "floor-collapsed";
     };
 
 /**
@@ -82,7 +93,10 @@ export class D1FloorStore implements FloorStore {
   }
 
   async commitAction(input: CommitActionInput): Promise<CommitActionResult> {
-    const requestHash = canonicalStringify(input.action);
+    const requestHash = canonicalStringify({
+      expectedSnapshotVersion: input.expectedSnapshotVersion,
+      action: input.action,
+    });
     const receipt = await this.receipt(input.floorSessionId, input.idempotencyKey);
     if (receipt) return replayReceipt(receipt, requestHash);
 
@@ -90,22 +104,31 @@ export class D1FloorStore implements FloorStore {
     if (!stored) return { accepted: false, reason: "not-found" };
     if (stored.version !== input.expectedSnapshotVersion)
       return { accepted: false, reason: "stale-snapshot" };
+    if (input.turnBudget !== undefined && stored.snapshot.turn > input.turnBudget)
+      return { accepted: false, reason: "floor-collapsed" };
 
     const transition = act(stored.snapshot, input.action);
     if (!transition.accepted) return { accepted: false, reason: "invalid-action" };
 
+    const nextVersion = stored.version + 1;
     const committed: CommitActionResult = {
       accepted: true,
       replayed: false,
-      version: stored.version + 1,
+      version: nextVersion,
       snapshot: transition.snapshot,
       event: transition.event,
     };
     const responseJson = canonicalStringify(committed);
     const sequence = stored.snapshot.events.length;
+    const extra =
+      input.extraStatements?.({
+        version: nextVersion,
+        snapshot: transition.snapshot,
+        event: transition.event,
+      }) ?? [];
 
     // D1 batch is transactional. Each statement is additionally conditional,
-    // which turns a stale version into three no-ops instead of a partial write.
+    // which turns a stale version into no-ops instead of a partial write.
     const batch = await this.database.batch([
       this.database
         .prepare(
@@ -128,7 +151,7 @@ export class D1FloorStore implements FloorStore {
          WHERE floor_session_id = ? AND version = ?`,
         )
         .bind(
-          stored.version + 1,
+          nextVersion,
           transition.snapshot.checksum,
           canonicalStringify(transition.snapshot),
           input.now,
@@ -147,11 +170,12 @@ export class D1FloorStore implements FloorStore {
           responseJson,
           input.now,
           input.floorSessionId,
-          stored.version + 1,
+          nextVersion,
         ),
+      ...extra,
     ]);
 
-    if (batch.at(-1)?.meta?.changes === 1) return committed;
+    if (batch[2]?.meta?.changes === 1) return committed;
 
     const persisted = await this.receipt(input.floorSessionId, input.idempotencyKey);
     if (persisted) return replayReceipt(persisted, requestHash);

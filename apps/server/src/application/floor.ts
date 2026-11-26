@@ -1,18 +1,12 @@
-import { type Action, type Observation, observe } from "@agentfall/engine";
+import { type Observation, observe } from "@agentfall/engine";
 
-import type { CommitActionResult, FloorStore } from "../persistence";
+import type { CommitActionInput, CommitActionResult, FloorStore } from "../persistence";
 
 export type ObserveFloorResult =
   | { accepted: true; snapshotVersion: number; observation: Observation }
   | { accepted: false; reason: "not-found" };
 
-export type SubmitFloorActionInput = {
-  floorSessionId: string;
-  idempotencyKey: string;
-  expectedSnapshotVersion: number;
-  action: Action;
-  now: string;
-};
+export type SubmitFloorActionInput = CommitActionInput;
 
 /** Application use case: no Hono, Workers, or transport types cross this boundary. */
 export class FloorApplication {

@@ -1,33 +1,18 @@
 import {
+  type Action,
   McpCharacterInputSchema,
+  McpFloorAbandonInputSchema,
+  McpFloorActionInputSchema,
+  McpFloorEndInputSchema,
+  McpFloorStartInputSchema,
   McpJournalInputSchema,
   McpObservationInputSchema,
   McpSeasonInputSchema,
   McpStandingsInputSchema,
 } from "@agentfall/contracts";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
 
 import { McpAuthenticationError } from "./gameplay";
-
-const idempotencyKey = z.string().min(1).max(128);
-const floorSessionId = z.string().min(1).max(128);
-const position = z.object({ x: z.number().int(), y: z.number().int() });
-const action = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("move"), direction: z.enum(["north", "east", "south", "west"]) }),
-  z.object({ type: z.literal("scout"), direction: z.enum(["north", "east", "south", "west"]) }),
-  z.object({ type: z.literal("attack"), targetId: z.string().min(1) }),
-  z.object({ type: z.literal("shove"), targetId: z.string().min(1) }),
-  z.object({ type: z.literal("disengaging-shot"), targetId: z.string().min(1) }),
-  z.object({ type: z.literal("arc-bolt"), targetId: z.string().min(1) }),
-  z.object({ type: z.literal("interact"), target: position }),
-  z.object({ type: z.literal("open-door"), target: position }),
-  z.object({ type: z.literal("close-door"), target: position }),
-  z.object({ type: z.literal("drop-item"), slot: z.number().int().min(0) }),
-  z.object({ type: z.literal("guard") }),
-  z.object({ type: z.literal("ward") }),
-  z.object({ type: z.literal("end-turn") }),
-]);
 
 type ToolData = Record<string, unknown>;
 
@@ -46,7 +31,7 @@ export interface McpGameplay {
     floorSessionId: string;
     snapshotVersion: number;
     idempotencyKey: string;
-    action: z.infer<typeof action>;
+    action: Action;
   }): Promise<ToolData>;
   currentCharacter(): Promise<ToolData>;
   journal(input: { limit: number }): Promise<ToolData>;
@@ -67,11 +52,7 @@ function createServer(gameplay: McpGameplay) {
     "floor_start",
     {
       description: "Start one floor.",
-      inputSchema: z.object({
-        mode: z.enum(["ranked", "practice"]),
-        idempotencyKey,
-        strategy: z.string().max(1_000).optional(),
-      }),
+      inputSchema: McpFloorStartInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async (input) => invoke(gameplay.startFloor(input)),
@@ -89,12 +70,7 @@ function createServer(gameplay: McpGameplay) {
     "floor_action",
     {
       description: "Commit one typed action.",
-      inputSchema: z.object({
-        floorSessionId,
-        snapshotVersion: z.number().int().min(0),
-        idempotencyKey,
-        action,
-      }),
+      inputSchema: McpFloorActionInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async (input) => invoke(gameplay.submitAction(input)),
@@ -121,7 +97,7 @@ function createServer(gameplay: McpGameplay) {
     "floor_abandon",
     {
       description: "Abandon a floor and discard its progress.",
-      inputSchema: z.object({ floorSessionId, idempotencyKey }),
+      inputSchema: McpFloorAbandonInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     async (input) => invoke(gameplay.abandonFloor(input)),
@@ -130,7 +106,7 @@ function createServer(gameplay: McpGameplay) {
     "floor_end",
     {
       description: "End an unlocked floor.",
-      inputSchema: z.object({ floorSessionId, idempotencyKey }),
+      inputSchema: McpFloorEndInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async (input) => invoke(gameplay.endFloor(input)),
@@ -170,7 +146,7 @@ async function invoke(operation: Promise<ToolData>) {
     return result(await operation);
   } catch (error) {
     if (error instanceof McpAuthenticationError) return result({ code: "AUTH_REQUIRED" });
-    throw error;
+    return result({ code: "INTERNAL" });
   }
 }
 

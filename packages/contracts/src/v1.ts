@@ -31,14 +31,52 @@ export const BACKPACK_SLOT_COUNT = 4;
 export const FLOOR_CONTENT_SCHEMA_VERSION = 1;
 /** Version of transport-safe, read-only MCP request and response values. */
 export const MCP_READ_SCHEMA_VERSION = 1;
+/** Version of transport-safe, mutating MCP request and response values. */
+export const MCP_MUTATION_SCHEMA_VERSION = 1;
 
 const mcpId = z.string().min(1).max(128);
+const mcpPosition = z.object({ x: z.number().int(), y: z.number().int() });
+
+export const McpActionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("move"), direction: z.enum(["north", "east", "south", "west"]) }),
+  z.object({ type: z.literal("scout"), direction: z.enum(["north", "east", "south", "west"]) }),
+  z.object({ type: z.literal("attack"), targetId: z.string().min(1) }),
+  z.object({ type: z.literal("shove"), targetId: z.string().min(1) }),
+  z.object({ type: z.literal("disengaging-shot"), targetId: z.string().min(1) }),
+  z.object({ type: z.literal("arc-bolt"), targetId: z.string().min(1) }),
+  z.object({ type: z.literal("interact"), target: mcpPosition }),
+  z.object({ type: z.literal("open-door"), target: mcpPosition }),
+  z.object({ type: z.literal("close-door"), target: mcpPosition }),
+  z.object({ type: z.literal("drop-item"), slot: z.number().int().min(0) }),
+  z.object({ type: z.literal("guard") }),
+  z.object({ type: z.literal("ward") }),
+  z.object({ type: z.literal("end-turn") }),
+]);
 
 /** Public MCP input schemas are owned by contracts rather than a transport adapter. */
+export const McpFloorStartInputSchema = z.object({
+  mode: z.enum(["ranked", "practice"]),
+  idempotencyKey: mcpId,
+  strategy: z.string().max(1_000).optional(),
+});
 export const McpObservationInputSchema = z.object({ floorSessionId: mcpId });
+export const McpFloorActionInputSchema = z.object({
+  floorSessionId: mcpId,
+  snapshotVersion: z.number().int().min(0),
+  idempotencyKey: mcpId,
+  action: McpActionSchema,
+});
 export const McpCharacterInputSchema = z.object({});
 export const McpJournalInputSchema = z.object({
   limit: z.number().int().min(1).max(100).default(25),
+});
+export const McpFloorAbandonInputSchema = z.object({
+  floorSessionId: mcpId,
+  idempotencyKey: mcpId,
+});
+export const McpFloorEndInputSchema = z.object({
+  floorSessionId: mcpId,
+  idempotencyKey: mcpId,
 });
 export const McpSeasonInputSchema = z.object({ seasonId: mcpId.optional() });
 export const McpStandingsInputSchema = z.object({
@@ -50,6 +88,13 @@ export const McpStandingsInputSchema = z.object({
 export const McpReadResultSchema = z
   .object({
     schemaVersion: z.literal(MCP_READ_SCHEMA_VERSION),
+  })
+  .passthrough();
+
+/** Every mutation result carries an independently versioned transport schema marker. */
+export const McpMutationResultSchema = z
+  .object({
+    schemaVersion: z.literal(MCP_MUTATION_SCHEMA_VERSION),
   })
   .passthrough();
 
@@ -497,6 +542,7 @@ export type FloorSession = {
   preFloorCharacter: ProgressionCharacter;
   snapshot: Snapshot;
   pendingNotes: string[];
+  strategy?: string;
 };
 
 export type ExpeditionRun = {

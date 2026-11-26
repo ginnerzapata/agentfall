@@ -47,8 +47,9 @@ export function createHttpApp() {
     await next();
   });
   app.use("/mcp", async (context, next) => {
+    const scope = await mcpRateLimitScope(context.req.raw);
     const identity = context.req.header("cf-connecting-ip") ?? "anonymous";
-    const allowed = await new D1RateLimiter(context.env.DB).allow("request", identity, Date.now());
+    const allowed = await new D1RateLimiter(context.env.DB).allow(scope, identity, Date.now());
     if (!allowed) return failure(context, 429, "RATE_LIMITED");
     await next();
   });
@@ -326,6 +327,26 @@ async function advanceSeason(
     ? context.json(result)
     : failure(context, result.reason === "not-found" ? 404 : 409, "INVALID_SEASON_TRANSITION");
 }
+const ACTIVE_FLOOR_MCP_MUTATIONS = new Set(["floor_action", "floor_abandon", "floor_end"]);
+async function mcpRateLimitScope(request: Request): Promise<RateLimitScope> {
+  if (request.method !== "POST") return "request";
+  try {
+    const payload = (await request.clone().json()) as {
+      method?: unknown;
+      params?: { name?: unknown };
+    };
+    if (
+      payload?.method === "tools/call" &&
+      typeof payload.params?.name === "string" &&
+      ACTIVE_FLOOR_MCP_MUTATIONS.has(payload.params.name)
+    )
+      return "active-floor-mutation";
+  } catch {
+    return "request";
+  }
+  return "request";
+}
+
 function loginPage(configured: boolean) {
   return `<!doctype html><title>Agentfall sign in</title><main><h1>Agentfall</h1>${configured ? '<a href="/auth/github">Continue with GitHub</a>' : "<p>Authentication is not configured for this environment.</p>"}</main>`;
 }

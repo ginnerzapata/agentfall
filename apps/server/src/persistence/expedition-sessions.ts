@@ -6,7 +6,7 @@ import {
 } from "@agentfall/contracts";
 import { abandonActiveFloor } from "@agentfall/engine";
 import { D1CapacityBudget } from "./capacity";
-import type { D1Database } from "./floor-store";
+import type { D1Database, D1PreparedStatement } from "./floor-store";
 
 const CHARGE_CAP = 3;
 const CHARGE_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -23,6 +23,9 @@ export type StartSessionInput = {
   definition: RunDefinition;
   snapshot: Snapshot;
   now: Date;
+  characterId?: string | null;
+  preStatements?: D1PreparedStatement[];
+  postStatements?: D1PreparedStatement[];
 };
 
 export type ChargeState = { available: number; calculatedAt: string };
@@ -60,13 +63,16 @@ export class D1ExpeditionSessions {
       return { accepted: false, reason: "capacity-exhausted", resetAt: capacity.resetAt };
     const now = input.now.toISOString();
     const expiresAt = new Date(input.now.getTime() + SESSION_LIFETIME_MS).toISOString();
-    const statements = [
+    const preCount = input.preStatements?.length ?? 0;
+    const statements: D1PreparedStatement[] = [
+      ...(input.preStatements ?? []),
       this.database
         .prepare(
           `INSERT INTO floor_sessions
              (id, run_id, account_id, mode, floor, status, definition_json, expires_at, last_action_at, created_at, updated_at)
            SELECT ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?
            WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND account_id = ? AND mode = ?)
+             ${input.characterId ? "AND EXISTS (SELECT 1 FROM characters WHERE id = ? AND account_id = ? AND status = 'living')" : ""}
              AND NOT EXISTS (
              SELECT 1 FROM floor_sessions
              WHERE account_id = ? AND mode = ? AND status IN ('active', 'paused')
@@ -86,6 +92,7 @@ export class D1ExpeditionSessions {
           input.runId,
           input.accountId,
           input.mode,
+          ...(input.characterId ? [input.characterId, input.accountId] : []),
           input.accountId,
           input.mode,
           ...(input.mode === "ranked" ? [input.accountId] : []),
@@ -113,8 +120,9 @@ export class D1ExpeditionSessions {
           )
           .bind(now, input.accountId, input.sessionId),
       );
+    if (input.postStatements?.length) statements.push(...input.postStatements);
     const result = await this.database.batch(statements);
-    if (result[0]?.meta?.changes !== 1) {
+    if (result[preCount]?.meta?.changes !== 1) {
       const charge = await this.charges(input.accountId, input.now);
       return {
         accepted: false,
@@ -162,13 +170,14 @@ export class D1ExpeditionSessions {
       .bind(sessionId, accountId)
       .first<SessionRow>();
     if (!row) return "not-found";
+    if (row.status !== "active" && row.status !== "paused")
+      return row.status === "expired" ? "expired" : "not-found";
     const stamp = now.toISOString();
     if (row.expires_at <= stamp) {
       await this.abandonExpired(now, accountId, sessionId);
       return "expired";
     }
     if (row.status === "active") return "resumed";
-    if (row.status !== "paused") return "not-found";
     const result = await this.database.batch([
       this.database
         .prepare(

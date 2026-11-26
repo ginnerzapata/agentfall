@@ -89,13 +89,20 @@ export function actInFloor(run: ExpeditionRun, action: Action): RunActionResult 
   if (!result.accepted) return { accepted: false, reason: result.reason };
 
   const next = clone(run);
+  return { accepted: true, ...resolveCommittedFloorSnapshot(next, result.snapshot) };
+}
+
+/** Resolves death or turn-budget collapse after an action snapshot has been produced. */
+export function resolveCommittedFloorSnapshot(
+  run: ExpeditionRun,
+  snapshot: Snapshot,
+): { run: ExpeditionRun; outcome: "continued" | "collapsed" | "died" } {
+  const next = clone(run);
   const nextSession = required(next.activeFloor);
-  nextSession.snapshot = result.snapshot;
-  if (result.snapshot.character.dead)
-    return { accepted: true, run: commitDeath(next), outcome: "died" };
-  if (result.snapshot.turn > nextSession.turnBudget)
-    return { accepted: true, run: rollback(next), outcome: "collapsed" };
-  return { accepted: true, run: next, outcome: "continued" };
+  nextSession.snapshot = clone(snapshot);
+  if (snapshot.character.dead) return { run: commitDeath(next), outcome: "died" };
+  if (snapshot.turn > nextSession.turnBudget) return { run: rollback(next), outcome: "collapsed" };
+  return { run: next, outcome: "continued" };
 }
 
 /** Commits a successful exit. Unexplored optional content is intentionally never required. */

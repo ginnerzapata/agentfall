@@ -203,7 +203,7 @@ The commands must pass from a clean checkout without undocumented manual setup.
 - [x] Confirm compatibility with the targeted Codex and Claude clients.
 - [ ] Implement tools for floor start, Observation, typed Action, character, Journal, abandonment/end, season details, and standings.
   - [x] Implement read-only Observation, character, Journal, season-details, and standings tools without persistence side effects; focused tests pass (#32).
-  - [ ] Implement mutating floor-start, typed-Action, abandonment, and end tools with idempotency and rollback semantics (#33).
+  - [x] Implement mutating floor-start, typed-Action, abandonment, and end tools with idempotency and rollback semantics (#33).
   - [ ] Prove clean Codex and Claude fixture-floor playability (#34).
 - [x] Require an idempotency key for every mutating tool call.
 - [x] Add accurate read-only and destructive tool annotations.
