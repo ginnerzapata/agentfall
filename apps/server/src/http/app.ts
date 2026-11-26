@@ -61,14 +61,21 @@ export function createHttpApp() {
   app.get("/version", (context) =>
     context.json({ service: "agentfall", version: context.env.RELEASE_VERSION }),
   );
-  app.get("/auth", (context) => context.html(loginPage(authConfigured(context.env))));
+  app.get("/auth", async (context) => {
+    context.header("cache-control", "no-store");
+    if (await authenticatedAccount(context)) return context.html(credentialPortalPage());
+    return context.html(loginPage(authConfigured(context.env)));
+  });
   app.get("/auth/github", async (context) => {
     const auth = authentication(context);
     if (!auth) return failure(context, 503, "AUTH_UNAVAILABLE");
     const nonce = crypto.randomUUID();
     const url = await auth.githubAuthorizationUrl(nonce);
     context.header("cache-control", "no-store");
-    context.header("set-cookie", cookie("agentfall_oauth_nonce", nonce, 600));
+    context.header(
+      "set-cookie",
+      cookie("agentfall_oauth_nonce", nonce, 600, secureOrigin(context.env)),
+    );
     return context.redirect(url, 302);
   });
   app.get("/auth/callback", async (context) => {
@@ -80,10 +87,16 @@ export function createHttpApp() {
       return failure(context, 401, auth ? "AUTH_REQUIRED" : "AUTH_UNAVAILABLE");
     try {
       const result = await auth.authenticateGithubCallback({ code, state, nonce });
+      const secure = secureOrigin(context.env);
       context.header("cache-control", "no-store");
-      context.header("set-cookie", cookie("agentfall_session", result.session, 8 * 60 * 60));
-      context.header("set-cookie", expiredCookie("agentfall_oauth_nonce"), { append: true });
-      return context.html(credentialPortalPage());
+      context.header(
+        "set-cookie",
+        cookie("agentfall_session", result.session, 8 * 60 * 60, secure),
+      );
+      context.header("set-cookie", expiredCookie("agentfall_oauth_nonce", secure), {
+        append: true,
+      });
+      return context.redirect("/auth", 302);
     } catch (error) {
       return failure(context, 401, error instanceof AuthError ? "AUTH_REQUIRED" : "INTERNAL");
     }
@@ -282,11 +295,14 @@ function readCookie(header: string | undefined, name: string) {
     .find((value) => value.startsWith(`${name}=`))
     ?.slice(name.length + 1);
 }
-function cookie(name: string, value: string, seconds: number) {
-  return `${name}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${seconds}`;
+function secureOrigin(env: AuthBindings) {
+  return Boolean(env.AGENTFALL_ORIGIN?.startsWith("https://"));
 }
-function expiredCookie(name: string) {
-  return `${name}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+function cookie(name: string, value: string, seconds: number, secure: boolean) {
+  return `${name}=${value}; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Lax; Path=/; Max-Age=${seconds}`;
+}
+function expiredCookie(name: string, secure: boolean) {
+  return `${name}=; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Lax; Path=/; Max-Age=0`;
 }
 async function jsonObject(context: { req: { json(): Promise<unknown> } }) {
   try {
@@ -351,5 +367,106 @@ function loginPage(configured: boolean) {
   return `<!doctype html><title>Agentfall sign in</title><main><h1>Agentfall</h1>${configured ? '<a href="/auth/github">Continue with GitHub</a>' : "<p>Authentication is not configured for this environment.</p>"}</main>`;
 }
 function credentialPortalPage() {
-  return "<!doctype html><title>Agentfall credentials</title><main><h1>Signed in</h1><p>Create a bearer credential through the credential API, then keep it in your MCP client’s secret environment configuration. Credentials are shown only when created or rotated.</p></main>";
+  return `<!doctype html>
+<title>Agentfall credentials</title>
+<main style="font-family:system-ui,sans-serif;max-width:44rem;margin:2rem auto;padding:0 1rem;line-height:1.5">
+  <h1>Agentfall Account &amp; Credentials</h1>
+  <p>Credentials are shown only once when created or rotated. Store your bearer token in a secret environment variable (<code>AGENTFALL_TOKEN</code>), never in prompts or git.</p>
+
+  <section>
+    <h2>1. Ranked Enrollment (Optional)</h2>
+    <form id="enroll-form">
+      <input id="display-name" name="displayName" placeholder="Display name (3-24 chars)" minlength="3" maxlength="24" required />
+      <button type="submit">Enroll for Ranked</button>
+    </form>
+    <p id="enroll-status"></p>
+  </section>
+
+  <section>
+    <h2>2. Create MCP Bearer Credential</h2>
+    <form id="create-form">
+      <input id="cred-label" name="label" placeholder="Label (e.g. codex-local)" maxlength="100" />
+      <button type="submit">Create Credential</button>
+    </form>
+    <pre id="new-token" style="background:#111;color:#0f0;padding:0.75rem;display:none;overflow:auto"></pre>
+  </section>
+
+  <section>
+    <h2>3. Active &amp; Historical Credentials</h2>
+    <ul id="cred-list"></ul>
+  </section>
+</main>
+<script>
+const enrollForm = document.getElementById("enroll-form");
+const enrollStatus = document.getElementById("enroll-status");
+const createForm = document.getElementById("create-form");
+const newToken = document.getElementById("new-token");
+const credList = document.getElementById("cred-list");
+
+async function loadCredentials() {
+  const res = await fetch("/v1/credentials");
+  if (!res.ok) return;
+  const data = await res.json();
+  credList.replaceChildren();
+  for (const c of data.credentials) {
+    const li = document.createElement("li");
+    const status = c.revokedAt ? "revoked" : "active";
+    li.textContent = (c.label || "unlabeled") + " (" + status + ", created " + c.createdAt + ") ";
+    if (!c.revokedAt) {
+      const rotateBtn = document.createElement("button");
+      rotateBtn.textContent = "Rotate";
+      rotateBtn.onclick = async () => {
+        const r = await fetch("/v1/credentials/" + encodeURIComponent(c.id) + "/rotate", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ label: c.label || undefined }),
+        });
+        const body = await r.json();
+        if (r.ok) showToken(body.token);
+        await loadCredentials();
+      };
+      const revokeBtn = document.createElement("button");
+      revokeBtn.textContent = "Revoke";
+      revokeBtn.onclick = async () => {
+        await fetch("/v1/credentials/" + encodeURIComponent(c.id) + "/revoke", { method: "POST" });
+        await loadCredentials();
+      };
+      li.append(rotateBtn, " ", revokeBtn);
+    }
+    credList.append(li);
+  }
+}
+
+function showToken(token) {
+  newToken.style.display = "block";
+  newToken.textContent = "export AGENTFALL_TOKEN=" + JSON.stringify(token);
+}
+
+enrollForm.onsubmit = async (event) => {
+  event.preventDefault();
+  const displayName = document.getElementById("display-name").value;
+  const res = await fetch("/v1/ranked-enrollment", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ displayName }),
+  });
+  const body = await res.json();
+  enrollStatus.textContent = res.ok ? "Enrolled as " + body.displayName : "Error: " + (body.error?.code || res.status);
+};
+
+createForm.onsubmit = async (event) => {
+  event.preventDefault();
+  const label = document.getElementById("cred-label").value.trim();
+  const res = await fetch("/v1/credentials", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(label ? { label } : {}),
+  });
+  const body = await res.json();
+  if (res.ok) showToken(body.token);
+  await loadCredentials();
+};
+
+loadCredentials();
+</script>`;
 }

@@ -241,7 +241,11 @@ export async function credentialHash(token: string, pepper: string) {
 async function exchangeGithubCode(code: string, configuration: AuthConfiguration) {
   const response = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
-    headers: { accept: "application/json", "content-type": "application/json" },
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "user-agent": "agentfall",
+    },
     body: JSON.stringify({
       client_id: configuration.githubClientId,
       client_secret: configuration.githubClientSecret,
@@ -257,7 +261,11 @@ async function exchangeGithubCode(code: string, configuration: AuthConfiguration
 
 async function githubIdentity(accessToken: string) {
   const response = await fetch("https://api.github.com/user", {
-    headers: { authorization: `Bearer ${accessToken}`, accept: "application/vnd.github+json" },
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: "application/vnd.github+json",
+      "user-agent": "agentfall",
+    },
   });
   const body = (await response.json().catch(() => null)) as { id?: unknown } | null;
   if (!response.ok || !body || (typeof body.id !== "number" && typeof body.id !== "string"))
@@ -267,7 +275,10 @@ async function githubIdentity(accessToken: string) {
 
 function validateExpiry(expiresAt: string | undefined) {
   if (!expiresAt) return null;
-  if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d\.\d{3}Z$/.test(expiresAt) || Date.parse(expiresAt) <= Date.now())
+  if (
+    !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(expiresAt) ||
+    Date.parse(expiresAt) <= Date.now()
+  )
     throw new AuthError("INVALID_STATE");
   return expiresAt;
 }
