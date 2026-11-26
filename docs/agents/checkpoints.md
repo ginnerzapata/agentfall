@@ -17,9 +17,9 @@ accumulating a project history; Git preserves the full history.
 
 ## Current handoff
 
-### #32 — complete
+### #33 — complete
 
-- Verified: `bun test apps/server/src/mcp/server.test.ts`, `bun run typecheck` — pass
-- Commit: `1d6e9d1` — Complete read-only MCP gameplay tools
-- Next: #33 — implement mutating MCP tools with idempotency and rollback semantics
-- Blocker: none
+- Verified: `bun run check`, `bun run typecheck`, `bun test` (78 pass, 0 fail), `bun run --cwd=apps/server test:worker`, `git diff --check` — pass
+- Commit: `bae4c20` — Complete mutating MCP floor-session tools
+- Next: #34 — prove clean Codex and Claude fixture-floor playability
+- Blocker: `claude` CLI is not installed in this environment (`codex` is available)
