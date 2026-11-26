@@ -14,13 +14,11 @@ export async function adminAuthorized(
     crypto.subtle.digest("SHA-256", encoder.encode(supplied)),
     crypto.subtle.digest("SHA-256", encoder.encode(configuredToken)),
   ]);
-  const timingSafeEqual = (
-    crypto.subtle as SubtleCrypto & {
-      timingSafeEqual?: (left: ArrayBuffer, right: ArrayBuffer) => boolean;
-    }
-  ).timingSafeEqual;
-  return timingSafeEqual
-    ? timingSafeEqual(providedDigest, configuredDigest)
+  const subtle = crypto.subtle as SubtleCrypto & {
+    timingSafeEqual?: (left: ArrayBuffer, right: ArrayBuffer) => boolean;
+  };
+  return typeof subtle.timingSafeEqual === "function"
+    ? subtle.timingSafeEqual(providedDigest, configuredDigest)
     : constantTimeEqual(providedDigest, configuredDigest);
 }
 
