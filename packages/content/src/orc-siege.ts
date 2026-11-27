@@ -107,13 +107,23 @@ const item = (
   id: string,
   kind: ItemContent["kind"],
   rarity: ItemContent["rarity"],
-  healing?: number,
+  modifiers: Partial<
+    Pick<
+      ItemContent,
+      | "healing"
+      | "temporaryDefense"
+      | "powerBonus"
+      | "defenseBonus"
+      | "focusBonus"
+      | "accuracyBonus"
+    >
+  > = {},
 ): ItemContent => ({
   schemaVersion: FLOOR_CONTENT_SCHEMA_VERSION,
   id,
   kind,
   rarity,
-  ...(healing === undefined ? {} : { healing }),
+  ...modifiers,
 });
 
 /** The complete authored Season Zero pack. Template tags drive floor variation and auditing. */
@@ -151,12 +161,12 @@ export const ORC_SIEGE_CONTENT: FloorContentPack = {
     encounter("warchief", 3, ["orc-warchief", "orc-archer"], ["boss", "telegraphed-strike"]),
   ],
   items: [
-    item("healing-potion", "consumable", "common", 4),
-    item("smoke-bomb", "consumable", "common"),
-    item("siege-key", "accessory", "uncommon"),
-    item("brute-cleaver", "weapon", "uncommon"),
-    item("scout-leathers", "armor", "uncommon"),
-    item("warchief-standard", "accessory", "rare"),
+    item("healing-potion", "consumable", "common", { healing: 4 }),
+    item("smoke-bomb", "consumable", "common", { temporaryDefense: 4 }),
+    item("siege-key", "accessory", "uncommon", { accuracyBonus: 1 }),
+    item("brute-cleaver", "weapon", "uncommon", { powerBonus: 2 }),
+    item("scout-leathers", "armor", "uncommon", { defenseBonus: 1 }),
+    item("warchief-standard", "accessory", "rare", { powerBonus: 1, defenseBonus: 1 }),
   ],
   traits: [],
   bosses: [
@@ -314,7 +324,14 @@ function roomAt(floor: GeneratedFloor, index: number) {
 function enemyState(id: string, position: { x: number; y: number }): EnemyState {
   const content = ORC_SIEGE_CONTENT.enemies.find((enemy) => enemy.id === id);
   if (!content) throw new Error(`Missing Orc Siege enemy ${id}.`);
-  return { id, position, behavior: content.behavior, ...content.stats };
+  return {
+    id,
+    position,
+    behavior: content.behavior,
+    role: content.role,
+    ...(content.range !== undefined ? { range: content.range } : {}),
+    ...content.stats,
+  };
 }
 
 function manhattan(left: { x: number; y: number }, right: { x: number; y: number }): number {

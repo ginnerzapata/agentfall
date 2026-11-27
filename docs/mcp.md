@@ -59,9 +59,12 @@ substitution:
 Both clients use standard HTTP MCP; neither needs a local gameplay UI or an
 Agentfall-held model credential.
 
-## Read-only tool example
+## Gameplay loop and ergonomics
 
-After connecting, ask the client to call `season_get`, then `character_get` and
-`floor_observation` with the floor-session ID returned by `floor_start`. Read
-results include `schemaVersion: 1`; treat the structured result as authoritative
-and never infer hidden tiles, entities, or future RNG from omitted fields.
+After connecting, call `season_get`, then `floor_start` (with `mode: "practice"` or `"ranked"` and an `idempotencyKey`).
+
+- **Compact HUD output:** `floor_start`, `floor_observation`, and `floor_action` return a concise, game-like ASCII HUD (Turn, HP, AP, recent combat/event log, role-glyph map, visible enemies with telegraphed intents, and readable actions) in `content[0].text` alongside structured data in `structuredContent`.
+- **Omitted `tiles` by default:** Pass `includeTiles: true` on `floor_start`, `floor_observation`, or `floor_action` only when you need the full remembered tile array.
+- **Fast turn execution:** `floor_action` accepts either a single `action` or a batch of up to 12 `actions` (with optional `autoEndTurn: true` to end the turn automatically when AP hits 0), plus out-of-combat `travel` movement and directional `interact` / `open-door` / `close-door`. `floorSessionId` and `snapshotVersion` default to your active floor session when omitted (supplying `snapshotVersion` still enforces strict optimistic concurrency).
+- **In-floor items & between-floor upgrades:** Use `use-item` and `equip-item` inside `floor_action`, and claim level-up rewards between floors with `character_upgrade`.
+- Results include `schemaVersion: 1`; treat `structuredContent` as authoritative and never infer hidden tiles, entities, or future RNG from omitted fields.

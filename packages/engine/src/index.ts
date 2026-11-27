@@ -10,10 +10,15 @@ import type {
   CombatantStats,
   CreateRunResult,
   Direction,
+  EnemyAttackOutcome,
   EnemyBehavior,
+  EnemyHealOutcome,
+  EnemyIntent,
   EngineEvent,
+  EquipmentSlots,
   FloorObjectState,
   FloorTile,
+  ItemDefinition,
   MandatoryObjectivePath,
   MandatoryObjectiveSolvability,
   Observation,
@@ -159,14 +164,22 @@ export function act(snapshot: Snapshot, action: Action): ActionResult {
   switch (action.type) {
     case "move":
       return move(snapshot, action.direction);
+    case "travel":
+      return travel(snapshot, action.direction, action.maxSteps);
     case "attack":
       return attack(snapshot, action.targetId);
-    case "interact":
-      return interact(snapshot, action.target);
-    case "open-door":
-      return changeDoor(snapshot, action.target, "open");
-    case "close-door":
-      return changeDoor(snapshot, action.target, "closed");
+    case "interact": {
+      const target = resolveTargetedPosition(snapshot, action.target, action.direction);
+      return target ? interact(snapshot, target) : reject("invalid-interaction");
+    }
+    case "open-door": {
+      const target = resolveTargetedPosition(snapshot, action.target, action.direction);
+      return target ? changeDoor(snapshot, target, "open") : reject("invalid-interaction");
+    }
+    case "close-door": {
+      const target = resolveTargetedPosition(snapshot, action.target, action.direction);
+      return target ? changeDoor(snapshot, target, "closed") : reject("invalid-interaction");
+    }
     case "guard":
       return guard(snapshot);
     case "shove":
@@ -177,6 +190,10 @@ export function act(snapshot: Snapshot, action: Action): ActionResult {
       return disengagingShot(snapshot, action.targetId);
     case "arc-bolt":
       return arcBolt(snapshot, action.targetId);
+    case "use-item":
+      return useItemInFloor(snapshot, action.slot);
+    case "equip-item":
+      return equipItemInFloor(snapshot, action.slot);
     case "drop-item":
       return dropItem(snapshot, action.slot);
     case "ward":
@@ -201,8 +218,10 @@ export function observe(snapshot: Snapshot): Observation {
     .map((enemy) => enemy.id);
   const legalActions: Observation["legalActions"] = [];
 
+  const inCombat = isInCombat(snapshot);
   if (snapshot.actionPoints >= 1 && directions.length > 0) {
     legalActions.push({ type: "move", directions });
+    if (!inCombat) legalActions.push({ type: "travel", directions });
   }
   if (snapshot.actionPoints >= 2 && targets.length > 0) {
     legalActions.push({ type: "attack", targetIds: targets });
@@ -266,25 +285,43 @@ export function observe(snapshot: Snapshot): Observation {
   const occupiedBackpackSlots = snapshot.inventory.backpack
     .map((stack, slot) => (stack === null ? undefined : slot))
     .filter((slot): slot is number => slot !== undefined);
+  const usableItemSlots = occupiedBackpackSlots.filter((slot) => {
+    const item = itemDefinition(snapshot.inventory.backpack[slot]?.itemId);
+    return item?.kind === "consumable";
+  });
+  const equippableItemSlots = occupiedBackpackSlots.filter((slot) => {
+    const item = itemDefinition(snapshot.inventory.backpack[slot]?.itemId);
+    return item !== undefined && item.kind !== "consumable";
+  });
+  if (snapshot.actionPoints >= ACTION_POINT_COST.useItem && usableItemSlots.length > 0) {
+    legalActions.push({ type: "use-item", slots: usableItemSlots });
+  }
+  if (snapshot.actionPoints >= ACTION_POINT_COST.equipItem && equippableItemSlots.length > 0) {
+    legalActions.push({ type: "equip-item", slots: equippableItemSlots });
+  }
   if (snapshot.actionPoints >= ACTION_POINT_COST.dropItem && occupiedBackpackSlots.length > 0) {
     legalActions.push({ type: "drop-item", slots: occupiedBackpackSlots });
   }
   legalActions.push({ type: "end-turn" });
 
+  const visibleEnemies = snapshot.enemies
+    .filter((enemy) => enemy.health > 0 && visiblePositions.has(positionKey(enemy.position)))
+    .map(clone);
+
   return {
     turn: snapshot.turn,
     actionPoints: snapshot.actionPoints,
     character: clone(snapshot.character),
-    enemies: snapshot.enemies
-      .filter((enemy) => enemy.health > 0 && visiblePositions.has(positionKey(enemy.position)))
-      .map(clone),
+    enemies: visibleEnemies,
+    enemyIntents: visibleEnemies.map((enemy) => computeEnemyIntent(snapshot, enemy)),
     objects: snapshot.objects
       .filter((object) => !object.used && visiblePositions.has(positionKey(object.position)))
       .map(({ used: _used, ...object }) => clone(object)),
     tiles: observedTiles(snapshot),
     ascii: renderAscii(snapshot),
-    inCombat: isInCombat(snapshot),
+    inCombat,
     attackPreviews: targets.map((targetId) => attackPreview(snapshot, targetId)),
+    recentEvents: formatRecentEvents(snapshot.events.slice(-6)),
     legalActions,
   };
 }
@@ -357,6 +394,88 @@ function move(snapshot: Snapshot, direction: Direction): ActionResult {
   });
 }
 
+function travel(snapshot: Snapshot, direction: Direction, maxSteps?: number): ActionResult {
+  if (isInCombat(snapshot)) return reject("in-combat");
+  const actionPointRejection = rejectForInsufficientActionPoints(snapshot, ACTION_POINT_COST.move);
+  if (actionPointRejection) return actionPointRejection;
+  const delta = directionEntries().find((entry) => entry.direction === direction)?.delta;
+  if (!delta) throw new Error(`Unknown direction: ${direction}`);
+  const limit = Math.min(
+    maxSteps !== undefined && Number.isSafeInteger(maxSteps) && maxSteps > 0
+      ? maxSteps
+      : snapshot.actionPoints,
+    snapshot.actionPoints,
+  );
+  const first = add(snapshot.character.position, delta);
+  if (!canEnter(snapshot, first)) return reject("blocked-destination");
+
+  const path: Position[] = [];
+  let cursor = clone(snapshot.character.position);
+  let stopReason: Extract<EngineEvent, { type: "travel" }>["stopReason"] = "max-steps";
+  let triggeredTrap: Extract<EngineEvent, { type: "travel" }>["triggeredTrap"];
+
+  for (let step = 0; step < limit; step += 1) {
+    const nextPos = add(cursor, delta);
+    if (!canEnter(snapshot, nextPos)) {
+      stopReason = "blocked";
+      break;
+    }
+    cursor = nextPos;
+    path.push(clone(cursor));
+    const trap = objectAt(snapshot, cursor, "trap");
+    if (trap) {
+      triggeredTrap = {
+        id: trap.id,
+        damage: trap.damage,
+        outcome: characterDamageOutcome(snapshot.character, trap.damage),
+      };
+      stopReason = "trap";
+      break;
+    }
+    const probe = { ...snapshot, character: { ...snapshot.character, position: cursor } };
+    if (isInCombat(probe)) {
+      stopReason = "combat";
+      break;
+    }
+    const adjacentPoi = adjacentPositions(cursor).some((pos) => {
+      const tile = tileAt(snapshot, pos);
+      if (tile?.door === "closed") return true;
+      return canInteract(probe, pos);
+    });
+    if (adjacentPoi) {
+      stopReason = "poi";
+      break;
+    }
+  }
+
+  const event: Extract<EngineEvent, { type: "travel" }> = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "travel",
+    direction,
+    from: clone(snapshot.character.position),
+    path,
+    cost: path.length,
+    stopReason,
+    ...(triggeredTrap ? { triggeredTrap } : {}),
+  };
+  return applyEvent(snapshot, event, (next) => {
+    const destination = event.path.at(-1);
+    if (destination) next.character.position = clone(destination);
+    next.actionPoints -= event.cost;
+    for (const pos of event.path) {
+      const probe = { ...next, character: { ...next.character, position: pos } };
+      updateRememberedTiles(probe);
+      next.rememberedTiles = probe.rememberedTiles;
+    }
+    if (event.triggeredTrap && destination) {
+      const nextTrap = objectAt(next, destination, "trap");
+      if (!nextTrap) throw new Error("Trap disappeared during travel resolution.");
+      nextTrap.used = true;
+      applyCharacterDamageOutcome(next.character, event.triggeredTrap.outcome);
+    }
+  });
+}
+
 function attack(snapshot: Snapshot, targetId: string): ActionResult {
   const actionPointRejection = rejectForInsufficientActionPoints(
     snapshot,
@@ -371,9 +490,9 @@ function attack(snapshot: Snapshot, targetId: string): ActionResult {
   const eventIndex = snapshot.events.length;
   const roll = rollDie(snapshot, eventIndex, `attack:${targetId}:hit`, D20_SIDES);
   const damage =
-    roll + snapshot.character.accuracy >= BASIC_ATTACK_HIT_DIFFICULTY + target.defense
+    roll + effectiveAccuracy(snapshot) >= BASIC_ATTACK_HIT_DIFFICULTY + target.defense
       ? rollDie(snapshot, eventIndex, `attack:${targetId}:damage`, BASIC_ATTACK_DAMAGE_DIE_SIDES) +
-        snapshot.character.power
+        effectivePower(snapshot)
       : 0;
   const event: EngineEvent = {
     schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
@@ -423,7 +542,7 @@ function shove(snapshot: Snapshot, targetId: string): ActionResult {
     type: "shove",
     targetId,
     ...(canMove ? { to } : {}),
-    damage: canMove ? (trap?.damage ?? 0) : 1 + snapshot.character.power,
+    damage: canMove ? (trap?.damage ?? 0) : 1 + effectivePower(snapshot),
     ...(trap ? { triggeredTrap: { id: trap.id, damage: trap.damage } } : {}),
     cost: ABILITY_ACTION_POINT_COST.shove,
   };
@@ -473,13 +592,13 @@ function disengagingShot(snapshot: Snapshot, targetId: string): ActionResult {
   const eventIndex = snapshot.events.length;
   const roll = rollDie(snapshot, eventIndex, `disengaging-shot:${targetId}:hit`, D20_SIDES);
   const damage =
-    roll + snapshot.character.accuracy >= BASIC_ATTACK_HIT_DIFFICULTY + target.defense
+    roll + effectiveAccuracy(snapshot) >= BASIC_ATTACK_HIT_DIFFICULTY + target.defense
       ? rollDie(
           snapshot,
           eventIndex,
           `disengaging-shot:${targetId}:damage`,
           BASIC_ATTACK_DAMAGE_DIE_SIDES,
-        ) + snapshot.character.power
+        ) + effectivePower(snapshot)
       : 0;
   const event: Extract<EngineEvent, { type: "disengaging-shot" }> = {
     schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
@@ -509,7 +628,7 @@ function arcBolt(snapshot: Snapshot, targetId: string): ActionResult {
     schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
     type: "arc-bolt",
     targetId,
-    damage: Math.max(1, 2 + snapshot.character.focus - target.focus),
+    damage: Math.max(1, 2 + effectiveFocus(snapshot) - target.focus),
     cost: ABILITY_ACTION_POINT_COST.arcBolt,
   };
   return applyEvent(snapshot, event, (next) => {
@@ -537,6 +656,81 @@ function ward(snapshot: Snapshot): ActionResult {
   });
 }
 
+function useItemInFloor(snapshot: Snapshot, slot: number): ActionResult {
+  const actionPointRejection = rejectForInsufficientActionPoints(
+    snapshot,
+    ACTION_POINT_COST.useItem,
+  );
+  if (actionPointRejection) return actionPointRejection;
+  const stack = snapshot.inventory.backpack[slot];
+  if (!Number.isSafeInteger(slot) || slot < 0 || !stack) return reject("invalid-target");
+  const item = itemDefinition(stack.itemId);
+  if (item?.kind !== "consumable") return reject("invalid-target");
+
+  const event: Extract<EngineEvent, { type: "use-item" }> = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "use-item",
+    slot,
+    itemId: stack.itemId,
+    ...(item.healing ? { healing: item.healing } : {}),
+    ...(item.temporaryDefense ? { temporaryDefense: item.temporaryDefense } : {}),
+    cost: ACTION_POINT_COST.useItem,
+  };
+  return applyEvent(snapshot, event, (next) => {
+    consumeInventorySlot(next.inventory, event.slot);
+    if (event.healing) {
+      next.character.health = Math.min(
+        next.character.maxHealth,
+        next.character.health + event.healing,
+      );
+    }
+    if (event.temporaryDefense) {
+      next.character.temporaryDefense = Math.max(
+        next.character.temporaryDefense,
+        event.temporaryDefense,
+      );
+    }
+    next.actionPoints -= event.cost;
+  });
+}
+
+function equipItemInFloor(snapshot: Snapshot, slot: number): ActionResult {
+  const actionPointRejection = rejectForInsufficientActionPoints(
+    snapshot,
+    ACTION_POINT_COST.equipItem,
+  );
+  if (actionPointRejection) return actionPointRejection;
+  const stack = snapshot.inventory.backpack[slot];
+  if (!Number.isSafeInteger(slot) || slot < 0 || !stack) return reject("invalid-target");
+  const item = itemDefinition(stack.itemId);
+  if (!item || item.kind === "consumable") return reject("invalid-target");
+  const equipmentSlot: keyof EquipmentSlots = item.kind;
+  const previousItemId = snapshot.inventory[equipmentSlot];
+  const probeInventory = clone(snapshot.inventory);
+  consumeInventorySlot(probeInventory, slot);
+  if (previousItemId !== null && !hasBackpackSpace(probeInventory, previousItemId)) {
+    return reject("backpack-full");
+  }
+
+  const event: Extract<EngineEvent, { type: "equip-item" }> = {
+    schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
+    type: "equip-item",
+    slot,
+    itemId: stack.itemId,
+    equipmentSlot,
+    previousItemId,
+    cost: ACTION_POINT_COST.equipItem,
+  };
+  return applyEvent(snapshot, event, (next) => {
+    consumeInventorySlot(next.inventory, event.slot);
+    if (event.previousItemId !== null && !addToBackpack(next.inventory, event.previousItemId)) {
+      throw new Error("Backpack capacity changed during equip.");
+    }
+    next.inventory[event.equipmentSlot] = event.itemId;
+    next.actionPoints -= event.cost;
+  });
+}
+
 function dropItem(snapshot: Snapshot, slot: number): ActionResult {
   const actionPointRejection = rejectForInsufficientActionPoints(
     snapshot,
@@ -560,24 +754,43 @@ function dropItem(snapshot: Snapshot, slot: number): ActionResult {
 }
 
 function endTurn(snapshot: Snapshot): ActionResult {
-  const temporaryDefense = temporaryDefenseFromUnusedActionPoints(snapshot.actionPoints);
-  const event: EngineEvent = {
+  const temporaryDefense = Math.max(
+    snapshot.character.temporaryDefense,
+    temporaryDefenseFromUnusedActionPoints(snapshot.actionPoints),
+  );
+  const { enemyMoves, enemyAttacks, enemyHeals } = resolveEnemyTurn(snapshot, temporaryDefense);
+  const event: Extract<EngineEvent, { type: "end-turn" }> = {
     schemaVersion: ENGINE_EVENT_SCHEMA_VERSION,
     type: "end-turn",
     temporaryDefense,
-    enemyMoves: enemyBehaviorMoves(snapshot),
+    enemyMoves,
+    ...(enemyAttacks.length > 0 ? { enemyAttacks } : {}),
+    ...(enemyHeals.length > 0 ? { enemyHeals } : {}),
   };
   return applyEvent(snapshot, event, (next) => {
     next.turn += 1;
     next.actionPoints = ACTION_POINT_LIMIT;
     next.character.temporaryDefense = event.temporaryDefense;
-    if (next.turn > next.character.guardExpiresTurn) next.character.guardedTiles = [];
-    if (next.turn > next.character.wardExpiresTurn) next.character.ward = 0;
+    for (const heal of event.enemyHeals ?? []) {
+      const target = next.enemies.find((candidate) => candidate.id === heal.targetId);
+      if (target && target.health > 0) {
+        target.health = Math.min(target.maxHealth, target.health + heal.amount);
+      }
+    }
+    for (const enemyAttack of event.enemyAttacks ?? []) {
+      if (enemyAttack.blocked > 0 && next.character.ward > 0) {
+        const wardUsed = Math.min(next.character.ward, enemyAttack.blocked);
+        next.character.ward -= wardUsed;
+      }
+      applyCharacterDamageOutcome(next.character, enemyAttack.outcome);
+    }
     for (const move of event.enemyMoves) {
       const enemy = next.enemies.find((candidate) => candidate.id === move.enemyId);
       if (!enemy) throw new Error("Enemy disappeared during pursuit.");
       enemy.position = clone(move.to);
     }
+    if (next.turn > next.character.guardExpiresTurn) next.character.guardedTiles = [];
+    if (next.turn > next.character.wardExpiresTurn) next.character.ward = 0;
   });
 }
 
@@ -753,6 +966,27 @@ function applyRecordedEvent(
         }).snapshot,
       };
     }
+    case "travel": {
+      const replayed = travel(snapshot, event.direction, event.path.length);
+      if (!replayed.accepted || canonicalStringify(replayed.event) !== canonicalStringify(event)) {
+        return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
+      }
+      return { accepted: true, snapshot: replayed.snapshot };
+    }
+    case "use-item": {
+      const replayed = useItemInFloor(snapshot, event.slot);
+      if (!replayed.accepted || canonicalStringify(replayed.event) !== canonicalStringify(event)) {
+        return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
+      }
+      return { accepted: true, snapshot: replayed.snapshot };
+    }
+    case "equip-item": {
+      const replayed = equipItemInFloor(snapshot, event.slot);
+      if (!replayed.accepted || canonicalStringify(replayed.event) !== canonicalStringify(event)) {
+        return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
+      }
+      return { accepted: true, snapshot: replayed.snapshot };
+    }
     case "attack": {
       const target = snapshot.enemies.find(
         (enemy) => enemy.id === event.targetId && enemy.health > 0,
@@ -822,11 +1056,12 @@ function applyRecordedEvent(
       });
     case "ward":
       return replayAbilityEvent(snapshot, eventIndex, event, { type: "ward" });
-    case "end-turn":
-      if (
-        event.temporaryDefense !== temporaryDefenseFromUnusedActionPoints(snapshot.actionPoints) ||
-        !sameEnemyMoves(event.enemyMoves, enemyBehaviorMoves(snapshot))
-      ) {
+    case "end-turn": {
+      const expectedTempDef = Math.max(
+        snapshot.character.temporaryDefense,
+        temporaryDefenseFromUnusedActionPoints(snapshot.actionPoints),
+      );
+      if (event.temporaryDefense !== expectedTempDef) {
         return rejectRecordedEvent(eventIndex, "invalid-recorded-event");
       }
       return {
@@ -835,13 +1070,29 @@ function applyRecordedEvent(
           next.turn += 1;
           next.actionPoints = ACTION_POINT_LIMIT;
           next.character.temporaryDefense = event.temporaryDefense;
+          for (const heal of event.enemyHeals ?? []) {
+            const target = next.enemies.find((candidate) => candidate.id === heal.targetId);
+            if (target && target.health > 0) {
+              target.health = Math.min(target.maxHealth, target.health + heal.amount);
+            }
+          }
+          for (const enemyAttack of event.enemyAttacks ?? []) {
+            if (enemyAttack.blocked > 0 && next.character.ward > 0) {
+              const wardUsed = Math.min(next.character.ward, enemyAttack.blocked);
+              next.character.ward -= wardUsed;
+            }
+            applyCharacterDamageOutcome(next.character, enemyAttack.outcome);
+          }
           for (const move of event.enemyMoves) {
             const enemy = next.enemies.find((candidate) => candidate.id === move.enemyId);
             if (!enemy) throw new Error("Recorded enemy disappeared during pursuit.");
             enemy.position = clone(move.to);
           }
+          if (next.turn > next.character.guardExpiresTurn) next.character.guardedTiles = [];
+          if (next.turn > next.character.wardExpiresTurn) next.character.ward = 0;
         }).snapshot,
       };
+    }
     case "interact":
       if (
         event.cost !== ACTION_POINT_COST.interact ||
@@ -1296,14 +1547,16 @@ function attackPreview(
 ): Observation["attackPreviews"][number] {
   const target = snapshot.enemies.find((enemy) => enemy.id === targetId);
   if (!target) throw new Error("Cannot preview an unknown target.");
-  const requiredRoll = BASIC_ATTACK_HIT_DIFFICULTY + target.defense - snapshot.character.accuracy;
+  const power = effectivePower(snapshot);
+  const accuracy = effectiveAccuracy(snapshot);
+  const requiredRoll = BASIC_ATTACK_HIT_DIFFICULTY + target.defense - accuracy;
   const successfulRolls = Math.max(0, D20_SIDES - Math.max(1, requiredRoll) + 1);
   return {
     targetId,
     hitProbability: successfulRolls / D20_SIDES,
     damageRange: {
-      minimum: successfulRolls === D20_SIDES ? 1 + snapshot.character.power : 0,
-      maximum: successfulRolls === 0 ? 0 : BASIC_ATTACK_DAMAGE_DIE_SIDES + snapshot.character.power,
+      minimum: successfulRolls === D20_SIDES ? 1 + power : 0,
+      maximum: successfulRolls === 0 ? 0 : BASIC_ATTACK_DAMAGE_DIE_SIDES + power,
     },
   };
 }
@@ -1322,28 +1575,6 @@ function applyCharacterDamageOutcome(
   character.health = outcome.health;
   character.dead = outcome.died;
   if (outcome.resurrected) character.resurrectionCharges = 0;
-}
-
-function enemyBehaviorMoves(
-  snapshot: Snapshot,
-): Extract<EngineEvent, { type: "end-turn" }>["enemyMoves"] {
-  const occupied = new Set(
-    snapshot.enemies
-      .filter((enemy) => enemy.health > 0)
-      .map((enemy) => positionKey(enemy.position)),
-  );
-  const moves: Extract<EngineEvent, { type: "end-turn" }>["enemyMoves"] = [];
-  for (const enemy of snapshot.enemies.filter((candidate) => candidate.health > 0)) {
-    occupied.delete(positionKey(enemy.position));
-    const destination = decideEnemyMove(snapshot, enemy, occupied);
-    if (destination) {
-      moves.push({ enemyId: enemy.id, from: clone(enemy.position), to: destination });
-      occupied.add(positionKey(destination));
-    } else {
-      occupied.add(positionKey(enemy.position));
-    }
-  }
-  return moves;
 }
 
 function decideEnemyMove(
@@ -1396,13 +1627,6 @@ function chooseSeededTie(snapshot: Snapshot, enemyId: string, candidates: Positi
           candidates.length,
         ) - 1;
   return clone(candidates[index] as Position);
-}
-
-function sameEnemyMoves(
-  left: Extract<EngineEvent, { type: "end-turn" }>["enemyMoves"],
-  right: Extract<EngineEvent, { type: "end-turn" }>["enemyMoves"],
-): boolean {
-  return canonicalStringify(left) === canonicalStringify(right);
 }
 
 function isInCombat(snapshot: Snapshot): boolean {
@@ -1627,27 +1851,66 @@ function renderAscii(snapshot: Snapshot): string {
       .filter((enemy) => enemy.health > 0 && visible.has(positionKey(enemy.position)))
       .map((enemy) => [positionKey(enemy.position), enemy]),
   );
+  const visibleObjects = new Map(
+    snapshot.objects
+      .filter((object) => !object.used && visible.has(positionKey(object.position)))
+      .map((object) => [positionKey(object.position), object]),
+  );
   const rows: string[] = [];
   for (let y = 0; y < snapshot.board.height; y += 1) {
     let row = "";
     for (let x = 0; x < snapshot.board.width; x += 1) {
       const position = { x, y };
-      const tile = knownTiles.get(positionKey(position));
+      const pKey = positionKey(position);
+      const tile = knownTiles.get(pKey);
+      const enemy = visibleEnemies.get(pKey);
+      const obj = visibleObjects.get(pKey);
       if (!tile) row += "?";
       else if (samePosition(position, snapshot.character.position)) row += "@";
-      else if (visibleEnemies.has(positionKey(position))) row += "e";
+      else if (enemy) row += enemyGlyph(enemy);
       else if (tile.door === "closed") row += "+";
       else if (tile.door === "open") row += "/";
       else if (tile.terrain === "wall") row += "#";
       else if (tile.terrain === "entrance") row += ">";
       else if (tile.terrain === "objective") row += snapshot.objectiveCollected ? "." : "*";
       else if (tile.terrain === "exit") row += snapshot.exitUnlocked ? "<" : "X";
+      else if (obj) row += objectGlyph(obj);
       else if (tile.terrain === "secret") row += "s";
       else row += ".";
     }
     rows.push(row);
   }
   return rows.join("\n");
+}
+
+function enemyGlyph(enemy: Snapshot["enemies"][number]): string {
+  switch (enemy.role) {
+    case "scout":
+      return "g";
+    case "brute":
+      return "B";
+    case "archer":
+      return "a";
+    case "shaman":
+      return "S";
+    case "boss":
+      return "W";
+    default:
+      return "e";
+  }
+}
+
+function objectGlyph(object: FloorObjectState): string {
+  switch (object.type) {
+    case "chest":
+      return "!";
+    case "sanctuary":
+      return "H";
+    case "item":
+      return "$";
+    case "trap":
+      return "^";
+  }
 }
 
 function isAdjacent(a: Position, b: Position): boolean {
@@ -1716,4 +1979,365 @@ function hash(value: string): number {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+const BUILTIN_ITEMS: Record<string, ItemDefinition> = {
+  "healing-potion": { id: "healing-potion", kind: "consumable", healing: 4 },
+  "smoke-bomb": { id: "smoke-bomb", kind: "consumable", temporaryDefense: 4 },
+  "brute-cleaver": { id: "brute-cleaver", kind: "weapon", powerBonus: 2 },
+  "scout-leathers": { id: "scout-leathers", kind: "armor", defenseBonus: 1 },
+  "tower-charm": { id: "tower-charm", kind: "accessory", focusBonus: 1 },
+  "siege-key": { id: "siege-key", kind: "accessory", accuracyBonus: 1 },
+  "warchief-standard": {
+    id: "warchief-standard",
+    kind: "accessory",
+    powerBonus: 1,
+    defenseBonus: 1,
+  },
+  "vanguard-starter-weapon": { id: "vanguard-starter-weapon", kind: "weapon" },
+  "vanguard-starter-armor": { id: "vanguard-starter-armor", kind: "armor" },
+  "ranger-starter-weapon": { id: "ranger-starter-weapon", kind: "weapon" },
+  "ranger-starter-armor": { id: "ranger-starter-armor", kind: "armor" },
+  "arcanist-starter-weapon": { id: "arcanist-starter-weapon", kind: "weapon" },
+  "arcanist-starter-armor": { id: "arcanist-starter-armor", kind: "armor" },
+};
+
+function itemDefinition(itemId: string | undefined): ItemDefinition | undefined {
+  return itemId ? BUILTIN_ITEMS[itemId] : undefined;
+}
+
+function equippedItems(snapshot: Snapshot): ItemDefinition[] {
+  return [snapshot.inventory.weapon, snapshot.inventory.armor, snapshot.inventory.accessory]
+    .map((id) => (id ? BUILTIN_ITEMS[id] : undefined))
+    .filter((item): item is ItemDefinition => item !== undefined);
+}
+
+function effectivePower(snapshot: Snapshot): number {
+  return (
+    snapshot.character.power +
+    equippedItems(snapshot).reduce((sum, item) => sum + (item.powerBonus ?? 0), 0)
+  );
+}
+
+function effectiveAccuracy(snapshot: Snapshot): number {
+  return (
+    snapshot.character.accuracy +
+    equippedItems(snapshot).reduce((sum, item) => sum + (item.accuracyBonus ?? 0), 0)
+  );
+}
+
+function effectiveDefense(
+  snapshot: Snapshot,
+  temporaryDefense = snapshot.character.temporaryDefense,
+): number {
+  return (
+    snapshot.character.defense +
+    temporaryDefense +
+    equippedItems(snapshot).reduce((sum, item) => sum + (item.defenseBonus ?? 0), 0)
+  );
+}
+
+function effectiveFocus(snapshot: Snapshot): number {
+  return (
+    snapshot.character.focus +
+    equippedItems(snapshot).reduce((sum, item) => sum + (item.focusBonus ?? 0), 0)
+  );
+}
+
+function resolveTargetedPosition(
+  snapshot: Snapshot,
+  target: Position | undefined,
+  direction: Direction | undefined,
+): Position | undefined {
+  if (target) return target;
+  if (!direction) return undefined;
+  const delta = directionEntries().find((entry) => entry.direction === direction)?.delta;
+  return delta ? add(snapshot.character.position, delta) : undefined;
+}
+
+function consumeInventorySlot(inventory: Snapshot["inventory"], slot: number): void {
+  const stack = inventory.backpack[slot];
+  if (!stack) throw new Error("Cannot consume an empty backpack slot.");
+  if (stack.quantity <= 1) inventory.backpack[slot] = null;
+  else stack.quantity -= 1;
+}
+
+function resolveEnemyTurn(
+  snapshot: Snapshot,
+  temporaryDefense: number,
+): {
+  enemyMoves: Extract<EngineEvent, { type: "end-turn" }>["enemyMoves"];
+  enemyAttacks: EnemyAttackOutcome[];
+  enemyHeals: EnemyHealOutcome[];
+} {
+  const occupied = new Set(
+    snapshot.enemies
+      .filter((enemy) => enemy.health > 0)
+      .map((enemy) => positionKey(enemy.position)),
+  );
+  const enemyMoves: Extract<EngineEvent, { type: "end-turn" }>["enemyMoves"] = [];
+  const enemyAttacks: EnemyAttackOutcome[] = [];
+  const enemyHeals: EnemyHealOutcome[] = [];
+
+  const living = snapshot.enemies.filter((candidate) => candidate.health > 0);
+  const simChar = clone(snapshot.character);
+  simChar.temporaryDefense = temporaryDefense;
+  const simEnemies = clone(living);
+  const eventIndex = snapshot.events.length;
+
+  for (const enemy of living) {
+    if (simChar.dead) break;
+    const distance = manhattan(enemy.position, simChar.position);
+    const behavior: EnemyBehavior = enemy.behavior ?? "pursue";
+    const rangedReach =
+      enemy.range ?? (enemy.role === "archer" ? 4 : enemy.role === "shaman" ? 3 : 0);
+
+    // Shaman prioritizes healing a wounded nearby ally.
+    if (enemy.role === "shaman" && distance <= 6) {
+      const wounded = simEnemies
+        .filter(
+          (ally) =>
+            ally.id !== enemy.id &&
+            ally.health > 0 &&
+            ally.health < ally.maxHealth &&
+            manhattan(enemy.position, ally.position) <= 4,
+        )
+        .sort(
+          (left, right) =>
+            left.health / left.maxHealth - right.health / right.maxHealth ||
+            left.id.localeCompare(right.id),
+        )[0];
+      if (wounded) {
+        const amount = Math.min(2, wounded.maxHealth - wounded.health);
+        wounded.health += amount;
+        enemyHeals.push({ enemyId: enemy.id, targetId: wounded.id, amount });
+        continue;
+      }
+    }
+
+    // Armed enemies attack when adjacent or within ranged reach with LoS.
+    const canMelee = enemy.power > 0 && distance === 1;
+    const canRanged =
+      enemy.power > 0 &&
+      rangedReach > 1 &&
+      distance <= rangedReach &&
+      hasLineOfSight(snapshot, enemy.position, simChar.position);
+
+    if (canMelee || canRanged) {
+      const kind: "melee" | "ranged" = canMelee ? "melee" : "ranged";
+      const roll = rollDie(snapshot, eventIndex, `enemy:${enemy.id}:hit`, D20_SIDES);
+      const hitTarget = BASIC_ATTACK_HIT_DIFFICULTY + effectiveDefense(snapshot, temporaryDefense);
+      let rawDamage =
+        roll + enemy.accuracy >= hitTarget
+          ? Math.max(1, rollDie(snapshot, eventIndex, `enemy:${enemy.id}:dmg`, 4) + enemy.power - 1)
+          : 0;
+      let blocked = 0;
+      if (
+        rawDamage > 0 &&
+        simChar.guardedTiles.some((tile) => samePosition(tile, enemy.position))
+      ) {
+        const guardBlock = Math.min(rawDamage, 2);
+        rawDamage -= guardBlock;
+        blocked += guardBlock;
+      }
+      if (rawDamage > 0 && simChar.ward > 0) {
+        const wardBlock = Math.min(rawDamage, simChar.ward);
+        rawDamage -= wardBlock;
+        simChar.ward -= wardBlock;
+        blocked += wardBlock;
+      }
+      const outcome = characterDamageOutcome(simChar, rawDamage);
+      applyCharacterDamageOutcome(simChar, outcome);
+      enemyAttacks.push({ enemyId: enemy.id, kind, roll, damage: rawDamage, blocked, outcome });
+
+      // Skirmishers can still step away after a hit-and-run if space allows.
+      if (behavior === "skirmish" && distance === 1) {
+        occupied.delete(positionKey(enemy.position));
+        const destination = decideEnemyMove(snapshot, enemy, occupied);
+        if (destination) {
+          enemyMoves.push({ enemyId: enemy.id, from: clone(enemy.position), to: destination });
+          occupied.add(positionKey(destination));
+        } else {
+          occupied.add(positionKey(enemy.position));
+        }
+      }
+      continue;
+    }
+
+    occupied.delete(positionKey(enemy.position));
+    const destination = decideEnemyMove(snapshot, enemy, occupied);
+    if (destination) {
+      enemyMoves.push({ enemyId: enemy.id, from: clone(enemy.position), to: destination });
+      occupied.add(positionKey(destination));
+    } else {
+      occupied.add(positionKey(enemy.position));
+    }
+  }
+
+  return { enemyMoves, enemyAttacks, enemyHeals };
+}
+
+function computeEnemyIntent(snapshot: Snapshot, enemy: Snapshot["enemies"][number]): EnemyIntent {
+  const distance = manhattan(enemy.position, snapshot.character.position);
+  const behavior: EnemyBehavior = enemy.behavior ?? "pursue";
+  const rangedReach =
+    enemy.range ?? (enemy.role === "archer" ? 4 : enemy.role === "shaman" ? 3 : 0);
+
+  if (enemy.role === "shaman") {
+    const wounded = snapshot.enemies.find(
+      (ally) =>
+        ally.id !== enemy.id &&
+        ally.health > 0 &&
+        ally.health < ally.maxHealth &&
+        manhattan(enemy.position, ally.position) <= 4,
+    );
+    if (wounded) {
+      return {
+        enemyId: enemy.id,
+        kind: "heal",
+        targetId: wounded.id,
+        summary: `Heal ${wounded.id} (+2 HP)`,
+      };
+    }
+  }
+
+  if (enemy.power > 0 && distance === 1) {
+    return {
+      enemyId: enemy.id,
+      kind: "melee",
+      damage: enemy.power + 3,
+      summary: `Melee strike (${Math.max(1, enemy.power)}-${enemy.power + 3} dmg)${behavior === "skirmish" ? " + retreat" : ""}`,
+    };
+  }
+  if (
+    enemy.power > 0 &&
+    rangedReach > 1 &&
+    distance <= rangedReach &&
+    hasLineOfSight(snapshot, enemy.position, snapshot.character.position)
+  ) {
+    return {
+      enemyId: enemy.id,
+      kind: "ranged",
+      damage: enemy.power + 3,
+      summary: `Ranged shot (${Math.max(1, enemy.power)}-${enemy.power + 3} dmg)`,
+    };
+  }
+  if (behavior === "skirmish" && distance === 1) {
+    return { enemyId: enemy.id, kind: "retreat", summary: "Retreat" };
+  }
+  if (behavior === "hold") {
+    return { enemyId: enemy.id, kind: "wait", summary: "Hold position" };
+  }
+  return { enemyId: enemy.id, kind: "move", summary: "Advance toward you" };
+}
+
+function formatRecentEvents(events: EngineEvent[]): string[] {
+  const lines: string[] = [];
+  for (const event of events) {
+    switch (event.type) {
+      case "move":
+        lines.push(
+          event.triggeredTrap
+            ? `Moved ${event.direction} into trap ${event.triggeredTrap.id} (-${event.triggeredTrap.damage} HP -> ${event.triggeredTrap.outcome.health} HP).`
+            : `Moved ${event.direction} to (${event.to.x},${event.to.y}).`,
+        );
+        break;
+      case "travel": {
+        const dest = event.path.at(-1);
+        const stop = event.triggeredTrap
+          ? `hit trap ${event.triggeredTrap.id} (-${event.triggeredTrap.damage} HP)`
+          : `stopped: ${event.stopReason}`;
+        lines.push(
+          `Traveled ${event.direction} ${event.path.length} tiles${dest ? ` to (${dest.x},${dest.y})` : ""} (${stop}).`,
+        );
+        break;
+      }
+      case "attack":
+        lines.push(
+          event.damage > 0
+            ? `Hit ${event.targetId} for ${event.damage} dmg (roll ${event.roll}).`
+            : `Missed ${event.targetId} (roll ${event.roll}).`,
+        );
+        break;
+      case "shove":
+        lines.push(
+          `Shoved ${event.targetId}${event.damage > 0 ? ` for ${event.damage} dmg` : ""}${event.triggeredTrap ? ` into trap ${event.triggeredTrap.id}` : ""}.`,
+        );
+        break;
+      case "disengaging-shot":
+        lines.push(
+          event.damage > 0
+            ? `Disengaging Shot hit ${event.targetId} for ${event.damage} dmg and stepped to (${event.to.x},${event.to.y}).`
+            : `Disengaging Shot missed ${event.targetId} and stepped to (${event.to.x},${event.to.y}).`,
+        );
+        break;
+      case "arc-bolt":
+        lines.push(`Arc Bolt struck ${event.targetId} for ${event.damage} dmg.`);
+        break;
+      case "guard":
+        lines.push(`Raised Guard over ${event.protectedTiles.length} adjacent tiles.`);
+        break;
+      case "ward":
+        lines.push(`Cast Ward (+${event.protection} barrier).`);
+        break;
+      case "scout":
+        lines.push(`Scouted ${event.direction}, revealing ${event.revealed.length} tiles.`);
+        break;
+      case "interact":
+        lines.push(
+          event.interaction === "objective"
+            ? "Collected the floor objective! The exit can now be unlocked."
+            : "Unlocked the floor exit! Call floor_end to descend.",
+        );
+        break;
+      case "open-chest":
+        lines.push(`Opened chest ${event.objectId} and looted ${event.itemId}.`);
+        break;
+      case "pickup-item":
+        lines.push(`Picked up ${event.itemId}.`);
+        break;
+      case "use-sanctuary":
+        lines.push(`Used sanctuary (+${event.healing} HP).`);
+        break;
+      case "open-door":
+        lines.push(`Opened door at (${event.target.x},${event.target.y}).`);
+        break;
+      case "close-door":
+        lines.push(`Closed door at (${event.target.x},${event.target.y}).`);
+        break;
+      case "use-item":
+        lines.push(
+          `Used ${event.itemId}${event.healing ? ` (+${event.healing} HP)` : ""}${event.temporaryDefense ? ` (+${event.temporaryDefense} temp DEF)` : ""}.`,
+        );
+        break;
+      case "equip-item":
+        lines.push(`Equipped ${event.itemId} in ${event.equipmentSlot} slot.`);
+        break;
+      case "drop-item":
+        lines.push(`Dropped ${event.itemId}.`);
+        break;
+      case "end-turn": {
+        const parts: string[] = [];
+        if (event.temporaryDefense > 0) parts.push(`+${event.temporaryDefense} temp DEF`);
+        for (const heal of event.enemyHeals ?? []) {
+          parts.push(`${heal.enemyId} healed ${heal.targetId} (+${heal.amount} HP)`);
+        }
+        for (const atk of event.enemyAttacks ?? []) {
+          if (atk.damage > 0 || atk.blocked > 0) {
+            parts.push(
+              `${atk.enemyId} ${atk.kind} hit for ${atk.damage} dmg${atk.blocked > 0 ? ` (${atk.blocked} blocked)` : ""} -> HP ${atk.outcome.health}`,
+            );
+          } else {
+            parts.push(`${atk.enemyId} ${atk.kind} missed (roll ${atk.roll})`);
+          }
+        }
+        if (event.enemyMoves.length > 0) {
+          parts.push(`${event.enemyMoves.length} enemy moved`);
+        }
+        lines.push(parts.length > 0 ? `Turn ended: ${parts.join("; ")}.` : "Turn ended.");
+        break;
+      }
+    }
+  }
+  return lines;
 }

@@ -28,13 +28,20 @@ describe("MCP server", () => {
       "floor_observation",
       "floor_action",
       "character_get",
+      "character_upgrade",
       "journal_get",
       "floor_abandon",
       "floor_end",
       "season_get",
       "standings_get",
     ]);
-    for (const name of ["floor_start", "floor_action", "floor_abandon", "floor_end"]) {
+    for (const name of [
+      "floor_start",
+      "floor_action",
+      "character_upgrade",
+      "floor_abandon",
+      "floor_end",
+    ]) {
       expect(tools.find((tool) => tool.name === name)?.inputSchema.required).toContain(
         "idempotencyKey",
       );
@@ -62,6 +69,7 @@ describe("MCP server", () => {
       observeFloor: async () => ({}),
       submitAction: async () => ({}),
       currentCharacter: async () => ({ schemaVersion: 1, status: "living" }),
+      chooseUpgrade: async () => ({}),
       journal: async () => ({}),
       abandonFloor: async () => ({}),
       endFloor: async () => ({}),
@@ -701,6 +709,51 @@ describe("MCP floor-session mutations", () => {
     });
     expect(post24hObserve.data).toMatchObject({ code: "SESSION_UNAVAILABLE" });
   });
+
+  test("supports batched actions, autoEndTurn, compact HUD observations, and character_upgrade", async () => {
+    const { database, clock, tokenA } = await setupMcpDatabase();
+    const handler = () =>
+      createAgentfallMcpHandler(
+        new D1McpGameplay(database, `Bearer ${tokenA}`, "pepper", () => clock),
+      );
+
+    const startedRaw = await mcpRequest(handler(), 1, "tools/call", {
+      name: "floor_start",
+      arguments: { mode: "ranked", idempotencyKey: "hud-start-1" },
+    });
+    const startedText = (startedRaw.result.content as Array<{ text: string }>)[0]?.text ?? "";
+    expect(startedText).toContain("=== FLOOR 1 |");
+    expect(startedText).toContain("MAP:");
+    expect(startedText).toContain("ACTIONS:");
+
+    const startedData = startedRaw.result.structuredContent as Record<string, unknown>;
+    // Compact by default: tiles omitted unless includeTiles: true.
+    expect(startedData.observation).not.toHaveProperty("tiles");
+
+    // Batched travel + autoEndTurn without passing floorSessionId or snapshotVersion.
+    const batch = await callTool(handler(), "floor_action", {
+      idempotencyKey: "hud-batch-1",
+      actions: [
+        { type: "move", direction: "east" },
+        { type: "move", direction: "east" },
+        { type: "move", direction: "east" },
+        { type: "move", direction: "east" },
+      ],
+      autoEndTurn: true,
+    });
+    expect(batch.isError).toBe(false);
+    expect(batch.data.accepted).toBe(true);
+    expect(batch.data.eventsCommitted).toBe(5); // 4 moves + auto end-turn
+    const batchObs = batch.data.observation as Observation;
+    expect(batchObs.turn).toBe(2);
+    expect(batchObs.actionPoints).toBe(4);
+    expect(batchObs.recentEvents.length).toBeGreaterThan(0);
+
+    // Explicit includeTiles: true returns the full tiles array.
+    const detailed = await callTool(handler(), "floor_observation", { includeTiles: true });
+    expect(detailed.isError).toBe(false);
+    expect(Array.isArray((detailed.data.observation as Observation).tiles)).toBe(true);
+  });
 });
 
 /** Walks the generated linear spine to collect the objective and unlock the exit. */
@@ -736,6 +789,9 @@ function planCorridorFloorCompletion(
   };
   walkTo({ x: objective.x - 1, y: objective.y });
   pushWithTurnBudget({ type: "interact", target: objective }, 1);
+  // Open the tactical closed door separating the objective room from the exit room.
+  walkTo({ x: exit.x - 3, y: exit.y });
+  pushWithTurnBudget({ type: "open-door", direction: "east" }, 1);
   walkTo({ x: exit.x - 1, y: exit.y });
   pushWithTurnBudget({ type: "interact", target: exit }, 1);
   return actions;

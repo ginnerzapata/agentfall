@@ -14,15 +14,17 @@ describe("floor generation", () => {
     );
   });
 
-  test("generates six to ten connected, valid floors across many seeds", () => {
+  test("generates four to six connected, branching valid floors across many seeds", () => {
     const floors = Array.from({ length: 100 }, (_, index) => generateFloor(`property-${index}`));
     for (const floor of floors) {
-      expect(floor.rooms.length).toBeGreaterThanOrEqual(6);
-      expect(floor.rooms.length).toBeLessThanOrEqual(10);
+      expect(floor.rooms.length).toBeGreaterThanOrEqual(4);
+      expect(floor.rooms.length).toBeLessThanOrEqual(6);
       expect(floor.encounters.length).toBeGreaterThanOrEqual(2);
       expect(floor.encounters.length).toBeLessThanOrEqual(3);
-      expect(floor.turnBudget).toBeGreaterThanOrEqual(60);
-      expect(floor.turnBudget).toBeLessThanOrEqual(100);
+      expect(floor.turnBudget).toBeGreaterThanOrEqual(25);
+      expect(floor.turnBudget).toBeLessThanOrEqual(45);
+      expect(floor.definition.tiles.some((tile) => tile.door === "closed")).toBe(true);
+      expect(floor.definition.enemies.every((enemy) => enemy.role !== undefined)).toBe(true);
       expect(validateGeneratedFloor(floor)).toEqual({ valid: true });
     }
     expect(validateGeneratedSeason(floors)).toEqual({ valid: true });
@@ -30,7 +32,7 @@ describe("floor generation", () => {
 
   test("rejects invalid generated seasons before publication", () => {
     const invalid = generateFloor("invalid");
-    invalid.rooms = invalid.rooms.slice(0, 5);
+    invalid.rooms = invalid.rooms.slice(0, 3);
     expect(validateGeneratedSeason([invalid])).toEqual({
       valid: false,
       reasons: ["floor-1:room-count"],

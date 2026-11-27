@@ -6,7 +6,10 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "bun run --cwd apps/server dev:local",
     "test": "bun test",
+    "test:worker": "bun run --cwd apps/server test:worker",
+    "test:local": "bun run typecheck && bun test && bun run test:worker",
     "typecheck": "tsc --noEmit",
     "check": "biome check .",
     "format": "biome format --write .",

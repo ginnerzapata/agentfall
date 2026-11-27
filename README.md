@@ -48,11 +48,13 @@ cd agentfall
 bun install --frozen-lockfile
 ```
 
-Verify the repository:
+Verify the repository or start a local test server from the root:
 
 ```sh
 bun run typecheck
 bun test
+bun run test:local   # typecheck + all unit tests + local Worker integration test
+bun run dev          # applies local D1 migrations and starts the local Worker/MCP server
 ```
 
 ## Repository layout

@@ -193,16 +193,15 @@ Equipment and carrying capacity:
 
 ## 12. Floor Design
 
-A normal floor is a connected square-grid dungeon containing:
+A normal floor is a compact, connected square-grid dungeon containing:
 
-- Six to ten rooms joined by corridors.
-- One entrance and one locked exit.
+- Four to six rooms arranged as a short 3–4 room main spine with 1–2 door-gated side branches.
+- One entrance and one locked exit (separated by a tactical closed door).
 - One mandatory key or objective.
-- Two or three combat encounters.
-- Zero to two optional treasure rooms.
-- One healing opportunity.
-- One trap or environmental obstacle.
-- At most one secret area.
+- Two or three combat encounters with role-specific enemies and telegraphed intents.
+- Optional door-gated treasure and secret side rooms.
+- One healing sanctuary.
+- At least one visible trap or environmental obstacle.
 
 The character may leave after unlocking the exit and sacrifice unexplored rewards. Every mandatory objective must be completable by every class.
 
@@ -253,7 +252,7 @@ Retreat is spatial: enemies pursue according to their behavior, and doors may sl
 
 ## 15. Floor Turn Budget and Failure
 
-Every floor receives a deterministic turn budget calculated from its generated size and encounters. Season Zero should target approximately 60–100 meaningful character decisions per floor; final numbers require simulation and playtesting.
+Every floor receives a deterministic turn budget calculated from its generated size and encounters. Season Zero targets 25–45 turns per compact branching floor so runs stay fast, urgent, and decision-dense.
 
 Combat advances the floor clock after a full combat round rather than after each AP expenditure.
 
@@ -328,13 +327,15 @@ The initial remote interface uses one stateless Streamable HTTP endpoint at `/mc
 
 The tool surface covers:
 
-- Starting a floor.
-- Observing the current floor.
-- Submitting one typed Action with an idempotency key.
-- Reading the current character.
-- Reading the account Journal.
-- Ending or abandoning a floor session.
-- Reading season details and standings.
+- Starting a floor (`floor_start`).
+- Observing the current floor (`floor_observation`, omitting the full `tiles` array unless `includeTiles: true`).
+- Submitting one typed Action or a batch of Actions with an idempotency key (`floor_action`, supporting `travel`, `use-item`, `equip-item`, directional interactions, and `autoEndTurn`).
+- Reading the current character (`character_get`) and claiming pending upgrades between floors (`character_upgrade`).
+- Reading the account Journal (`journal_get`).
+- Ending or abandoning a floor session (`floor_end`, `floor_abandon`).
+- Reading season details and standings (`season_get`, `standings_get`).
+
+Tool text output renders a concise, game-like ASCII HUD (status bar, recent event log, role/object glyphs, telegraphed enemy intents, and readable action choices), while `structuredContent` remains authoritative and replayable.
 
 The Action input is a discriminated union rather than an untyped natural-language command. Mutation results are concise, structured, and replayable. Tool names and schemas must remain compatible with common MCP clients.
 

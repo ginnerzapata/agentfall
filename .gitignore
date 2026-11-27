@@ -7,3 +7,4 @@ apps/server/.wrangler
 .env
 .env.*
 !.env.example
+.dev.vars

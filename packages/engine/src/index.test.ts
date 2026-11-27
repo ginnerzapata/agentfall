@@ -110,6 +110,8 @@ describe("deterministic engine", () => {
       openDoor: 1,
       closeDoor: 1,
       dropItem: 1,
+      useItem: 1,
+      equipItem: 1,
     });
 
     let snapshot = createSnapshot({ ...run, enemies: [], board: { width: 3, height: 2 } });
@@ -1083,5 +1085,120 @@ describe("deterministic engine", () => {
         ).toBe(snapshot.enemies.length);
       }
     }
+  });
+
+  test("resolves enemy attacks, shaman heals, telegraphed intents, and deterministic event replay", () => {
+    const combatDef: RunDefinition = {
+      ...run,
+      board: { width: 6, height: 2 },
+      tiles: Array.from({ length: 12 }, (_, index) => {
+        const position = { x: index % 6, y: Math.floor(index / 6) };
+        const terrain =
+          index === 0 ? "entrance" : index === 6 ? "objective" : index === 5 ? "exit" : "floor";
+        return { position, terrain } as const;
+      }),
+      character: { ...run.character, class: "arcanist", health: 12, maxHealth: 12, focus: 3 },
+      enemies: [
+        {
+          id: "brute",
+          role: "brute",
+          behavior: "pursue",
+          position: { x: 1, y: 0 },
+          health: 6,
+          maxHealth: 10,
+          defense: 1,
+          movement: 1,
+          accuracy: 10,
+          power: 3,
+          focus: 1,
+        },
+        {
+          id: "shaman",
+          role: "shaman",
+          behavior: "hold",
+          range: 3,
+          position: { x: 3, y: 0 },
+          health: 8,
+          maxHealth: 8,
+          defense: 1,
+          movement: 1,
+          accuracy: 2,
+          power: 1,
+          focus: 3,
+        },
+      ],
+    };
+
+    const initial = createSnapshot(combatDef);
+    const view = observe(initial);
+    expect(view.enemyIntents.find((i) => i.enemyId === "brute")?.kind).toBe("melee");
+    expect(view.enemyIntents.find((i) => i.enemyId === "shaman")?.kind).toBe("heal");
+    expect(view.ascii).toContain("B");
+    expect(view.ascii).toContain("S");
+
+    const warded = act(initial, { type: "ward" });
+    if (!warded.accepted) throw new Error("Expected ward.");
+    const ended = act(warded.snapshot, { type: "end-turn" });
+    if (!ended.accepted || ended.event.type !== "end-turn") throw new Error("Expected end-turn.");
+
+    expect(ended.event.enemyAttacks?.length).toBe(1);
+    expect(ended.event.enemyAttacks?.[0]?.blocked).toBeGreaterThan(0);
+    expect(ended.event.enemyHeals).toEqual([{ enemyId: "shaman", targetId: "brute", amount: 2 }]);
+    expect(ended.snapshot.enemies.find((e) => e.id === "brute")?.health).toBe(8);
+    expect(observe(ended.snapshot).recentEvents.length).toBeGreaterThan(0);
+
+    const replayed = replayEvents(combatDef, ended.snapshot.events);
+    expect(replayed.accepted).toBe(true);
+    if (replayed.accepted) expect(replayed.snapshot.checksum).toBe(ended.snapshot.checksum);
+  });
+
+  test("supports out-of-combat travel, in-floor item use/equip, and directional interactions", () => {
+    const def: RunDefinition = {
+      ...run,
+      board: { width: 6, height: 2 },
+      tiles: Array.from({ length: 12 }, (_, index) => {
+        const position = { x: index % 6, y: Math.floor(index / 6) };
+        const terrain =
+          index === 0 ? "entrance" : index === 4 ? "objective" : index === 5 ? "exit" : "floor";
+        return { position, terrain } as const;
+      }),
+      character: {
+        ...run.character,
+        health: 7,
+        maxHealth: 12,
+        backpack: ["healing-potion", "brute-cleaver"],
+      },
+      enemies: [],
+    };
+
+    let snap = createSnapshot(def);
+    const traveled = act(snap, { type: "travel", direction: "east" });
+    if (!traveled.accepted || traveled.event.type !== "travel") throw new Error("Expected travel.");
+    // Stops at (3,0) because (4,0) is the objective POI.
+    expect(traveled.snapshot.character.position).toEqual({ x: 3, y: 0 });
+    expect(traveled.event.stopReason).toBe("poi");
+    snap = traveled.snapshot;
+
+    const collected = act(snap, { type: "interact", direction: "east" });
+    if (!collected.accepted) throw new Error("Expected directional interact.");
+    expect(collected.snapshot.objectiveCollected).toBe(true);
+    snap = collected.snapshot;
+
+    const ended = act(snap, { type: "end-turn" });
+    if (!ended.accepted) throw new Error("Expected end-turn.");
+    snap = ended.snapshot;
+
+    const healed = act(snap, { type: "use-item", slot: 0 });
+    if (!healed.accepted) throw new Error("Expected use-item.");
+    expect(healed.snapshot.character.health).toBe(11);
+    snap = healed.snapshot;
+
+    const equipped = act(snap, { type: "equip-item", slot: 1 });
+    if (!equipped.accepted) throw new Error("Expected equip-item.");
+    expect(equipped.snapshot.inventory.weapon).toBe("brute-cleaver");
+
+    const replayed = replayEvents(def, equipped.snapshot.events);
+    expect(replayed.accepted).toBe(true);
+    if (replayed.accepted) expect(replayed.snapshot.checksum).toBe(equipped.snapshot.checksum);
   });
 });

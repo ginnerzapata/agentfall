@@ -12,6 +12,7 @@ import {
 } from "@agentfall/contracts";
 import {
   abandonActiveFloor,
+  chooseUpgrade as applyCharacterUpgrade,
   completeActiveFloor,
   createExpeditionRun,
   createNextCharacter,
@@ -89,6 +90,7 @@ export class D1McpGameplay implements McpGameplay {
     mode: "ranked" | "practice";
     idempotencyKey: string;
     strategy?: string;
+    includeTiles?: boolean;
   }): Promise<Record<string, unknown>> {
     const accountId = await this.accountId();
     const now = this.now();
@@ -162,7 +164,7 @@ export class D1McpGameplay implements McpGameplay {
         turnBudget: activeFloor.turnBudget,
         ...(input.strategy ? { strategy: input.strategy } : {}),
       },
-      observation: observe(activeFloor.snapshot),
+      observation: compactObservation(observe(activeFloor.snapshot), input.includeTiles),
     };
     const serializedRun = canonicalStringify(started.run);
     const { preStatements, postStatements } = this.startBatchStatements({
@@ -207,39 +209,60 @@ export class D1McpGameplay implements McpGameplay {
     return mutationResult(response);
   }
 
-  async observeFloor(input: { floorSessionId: string }): Promise<Record<string, unknown>> {
+  async observeFloor(input: {
+    floorSessionId?: string;
+    includeTiles?: boolean;
+  }): Promise<Record<string, unknown>> {
     const accountId = await this.accountId(false);
-    const session = await this.session(accountId, input.floorSessionId);
+    const floorSessionId = input.floorSessionId ?? (await this.activeSessionId(accountId));
+    if (!floorSessionId) return readResult({ code: "NOT_FOUND" });
+    const session = await this.session(accountId, floorSessionId);
     if (!session) return readResult({ code: "NOT_FOUND" });
     const availability = sessionAvailability(session, this.now().toISOString());
     if (availability !== "open") return readResult({ code: availability });
     const result = await new FloorApplication(new D1FloorStore(this.database)).observe(
-      input.floorSessionId,
+      floorSessionId,
     );
     if (!result.accepted) return readResult({ code: "NOT_FOUND" });
-    return readResult({ snapshotVersion: result.snapshotVersion, observation: result.observation });
+    return readResult({
+      floorSessionId,
+      floor: session.floor,
+      snapshotVersion: result.snapshotVersion,
+      observation: compactObservation(result.observation, input.includeTiles),
+    });
   }
 
   async submitAction(input: {
-    floorSessionId: string;
-    snapshotVersion: number;
+    floorSessionId?: string;
+    snapshotVersion?: number;
     idempotencyKey: string;
-    action: Action;
+    action?: Action;
+    actions?: Action[];
+    autoEndTurn?: boolean;
+    includeTiles?: boolean;
   }): Promise<Record<string, unknown>> {
     const accountId = await this.accountId();
     const now = this.now();
     if (!(await this.allowRateScope("active-floor-mutation", accountId, now)))
       return mutationResult({ code: "RATE_LIMITED" });
 
-    const session = await this.session(accountId, input.floorSessionId);
+    const floorSessionId = input.floorSessionId ?? (await this.activeSessionId(accountId));
+    if (!floorSessionId) return mutationResult({ code: "NOT_FOUND" });
+    const session = await this.session(accountId, floorSessionId);
     if (!session) return mutationResult({ code: "NOT_FOUND" });
 
+    const store = new D1FloorStore(this.database);
+    const expectedSnapshotVersion =
+      input.snapshotVersion ?? (await store.loadSnapshot(floorSessionId))?.version;
+    if (expectedSnapshotVersion === undefined) return mutationResult({ code: "NOT_FOUND" });
+
     const requestHash = canonicalStringify({
-      expectedSnapshotVersion: input.snapshotVersion,
-      action: input.action,
+      expectedSnapshotVersion,
+      ...(input.actions ? { actions: input.actions } : { action: input.action }),
+      ...(input.autoEndTurn ? { autoEndTurn: true } : {}),
     });
     const existingActionReceipt = await this.lookupReceipt(
-      input.floorSessionId,
+      floorSessionId,
       input.idempotencyKey,
       requestHash,
     );
@@ -248,7 +271,7 @@ export class D1McpGameplay implements McpGameplay {
       const original = existingActionReceipt.response as unknown as CommitActionResult;
       if (!original.accepted) return mutationResult({ code: "INTERNAL" });
       const outcome = await this.replayedActionOutcome(
-        input.floorSessionId,
+        floorSessionId,
         input.idempotencyKey,
         original.snapshot.character.dead,
       );
@@ -256,15 +279,17 @@ export class D1McpGameplay implements McpGameplay {
         accepted: true,
         replayed: true,
         outcome,
+        floorSessionId,
+        floor: session.floor,
         snapshotVersion: original.version,
-        observation: observe(original.snapshot),
+        observation: compactObservation(observe(original.snapshot), input.includeTiles),
       });
     }
 
     const sessions = new D1ExpeditionSessions(this.database);
-    await sessions.abandonExpired(now, accountId, input.floorSessionId);
+    await sessions.abandonExpired(now, accountId, floorSessionId);
     await sessions.pauseIdle(now);
-    const current = await this.session(accountId, input.floorSessionId);
+    const current = await this.session(accountId, floorSessionId);
     if (!current) return mutationResult({ code: "NOT_FOUND" });
     const nowIso = now.toISOString();
     const availability = sessionAvailability(current, nowIso);
@@ -278,9 +303,13 @@ export class D1McpGameplay implements McpGameplay {
 
     const turnBudget = run.activeFloor.turnBudget;
     let computedOutcome: "continued" | "died" | "collapsed" = "continued";
-    const committed = await new FloorApplication(new D1FloorStore(this.database)).submitAction({
-      ...input,
-      expectedSnapshotVersion: input.snapshotVersion,
+    const committed = await new FloorApplication(store).submitAction({
+      floorSessionId,
+      idempotencyKey: input.idempotencyKey,
+      expectedSnapshotVersion,
+      action: input.action,
+      actions: input.actions,
+      autoEndTurn: input.autoEndTurn,
       now: nowIso,
       turnBudget,
       extraStatements: ({ version, snapshot }) => {
@@ -288,7 +317,7 @@ export class D1McpGameplay implements McpGameplay {
         computedOutcome = resolved.outcome;
         return this.actionPostCommitStatements({
           accountId,
-          floorSessionId: input.floorSessionId,
+          floorSessionId,
           idempotencyKey: input.idempotencyKey,
           snapshotVersion: version,
           runRow,
@@ -307,7 +336,7 @@ export class D1McpGameplay implements McpGameplay {
 
     if (committed.replayed) {
       const outcome = await this.replayedActionOutcome(
-        input.floorSessionId,
+        floorSessionId,
         input.idempotencyKey,
         committed.snapshot.character.dead,
       );
@@ -315,8 +344,11 @@ export class D1McpGameplay implements McpGameplay {
         accepted: true,
         replayed: true,
         outcome,
+        floorSessionId,
+        floor: current.floor,
+        turnBudget,
         snapshotVersion: committed.version,
-        observation: observe(committed.snapshot),
+        observation: compactObservation(observe(committed.snapshot), input.includeTiles),
       });
     }
 
@@ -324,8 +356,12 @@ export class D1McpGameplay implements McpGameplay {
       accepted: true,
       replayed: false,
       outcome: computedOutcome,
+      floorSessionId,
+      floor: current.floor,
+      turnBudget,
+      eventsCommitted: committed.events?.length ?? 1,
       snapshotVersion: committed.version,
-      observation: observe(committed.snapshot),
+      observation: compactObservation(observe(committed.snapshot), input.includeTiles),
     });
   }
 
@@ -359,8 +395,112 @@ export class D1McpGameplay implements McpGameplay {
     });
   }
 
+  async chooseUpgrade(input: {
+    upgradeId: string;
+    idempotencyKey: string;
+  }): Promise<Record<string, unknown>> {
+    const accountId = await this.accountId();
+    const now = this.now();
+    if (!(await this.allowRateScope("request", accountId, now)))
+      return mutationResult({ code: "RATE_LIMITED" });
+
+    const scopeId = `upgrade:${accountId}`;
+    const requestHash = canonicalStringify({ upgradeId: input.upgradeId });
+    const existingReceipt = await this.lookupReceipt(scopeId, input.idempotencyKey, requestHash);
+    if (existingReceipt) return replayOrConflict(existingReceipt);
+
+    const runRow = await this.database
+      .prepare(
+        `SELECT id, season_id, character_id, mode, status, state_json FROM runs
+         WHERE account_id = ? AND status = 'active'
+         ORDER BY updated_at DESC LIMIT 1`,
+      )
+      .bind(accountId)
+      .first<RunRow>();
+    if (!runRow) return mutationResult({ code: "NOT_FOUND" });
+    const run = parseJson<ExpeditionRun>(runRow.state_json);
+    if (run.activeFloor) return mutationResult({ code: "SESSION_ACTIVE" });
+    if (run.status === "dead") return mutationResult({ code: "CHARACTER_DEAD" });
+
+    const upgraded = applyCharacterUpgrade(run.character, input.upgradeId);
+    if (!upgraded) return mutationResult({ code: "INVALID_UPGRADE" });
+    const nextRun: ExpeditionRun = { ...run, character: upgraded };
+    const nowIso = now.toISOString();
+    const response = {
+      accepted: true,
+      replayed: false,
+      upgradeId: input.upgradeId,
+      character: upgraded.character,
+      level: upgraded.level,
+      pendingUpgrades: upgraded.pendingUpgrades,
+    };
+
+    const statements: D1PreparedStatement[] = [
+      this.database
+        .prepare(
+          `INSERT OR IGNORE INTO mutation_receipts
+             (scope_id, idempotency_key, request_hash, response_json, created_at)
+           SELECT ?, ?, ?, ?, ?
+           WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND state_json = ?)`,
+        )
+        .bind(
+          scopeId,
+          input.idempotencyKey,
+          requestHash,
+          canonicalStringify(response),
+          nowIso,
+          runRow.id,
+          runRow.state_json,
+        ),
+    ];
+    if (runRow.mode === "ranked" && runRow.character_id) {
+      statements.push(
+        this.database
+          .prepare(
+            `UPDATE characters SET state_json = ?, updated_at = ?
+             WHERE id = ? AND account_id = ? AND status = 'living'
+               AND EXISTS (SELECT 1 FROM runs WHERE id = ? AND state_json = ?)
+               AND EXISTS (SELECT 1 FROM mutation_receipts WHERE scope_id = ? AND idempotency_key = ?)`,
+          )
+          .bind(
+            canonicalStringify(upgraded),
+            nowIso,
+            runRow.character_id,
+            accountId,
+            runRow.id,
+            runRow.state_json,
+            scopeId,
+            input.idempotencyKey,
+          ),
+      );
+    }
+    statements.push(
+      this.database
+        .prepare(
+          `UPDATE runs SET state_json = ?, updated_at = ?
+           WHERE id = ? AND state_json = ?
+             AND EXISTS (SELECT 1 FROM mutation_receipts WHERE scope_id = ? AND idempotency_key = ?)`,
+        )
+        .bind(
+          canonicalStringify(nextRun),
+          nowIso,
+          runRow.id,
+          runRow.state_json,
+          scopeId,
+          input.idempotencyKey,
+        ),
+    );
+    const result = await this.database.batch(statements);
+    if (result.at(-1)?.meta?.changes !== 1) {
+      const racedReceipt = await this.lookupReceipt(scopeId, input.idempotencyKey, requestHash);
+      if (racedReceipt) return replayOrConflict(racedReceipt);
+      return mutationResult({ code: "INVALID_UPGRADE" });
+    }
+    return mutationResult(response);
+  }
+
   async abandonFloor(input: {
-    floorSessionId: string;
+    floorSessionId?: string;
     idempotencyKey: string;
   }): Promise<Record<string, unknown>> {
     const accountId = await this.accountId();
@@ -368,23 +508,25 @@ export class D1McpGameplay implements McpGameplay {
     if (!(await this.allowRateScope("active-floor-mutation", accountId, now)))
       return mutationResult({ code: "RATE_LIMITED" });
 
-    const session = await this.session(accountId, input.floorSessionId);
+    const floorSessionId = input.floorSessionId ?? (await this.activeSessionId(accountId));
+    if (!floorSessionId) return mutationResult({ code: "NOT_FOUND" });
+    const session = await this.session(accountId, floorSessionId);
     if (!session) return mutationResult({ code: "NOT_FOUND" });
 
-    const scopeId = `abandon:${accountId}:${input.floorSessionId}`;
-    const requestHash = canonicalStringify({ op: "abandon", floorSessionId: input.floorSessionId });
+    const scopeId = `abandon:${accountId}:${floorSessionId}`;
+    const requestHash = canonicalStringify({ op: "abandon", floorSessionId });
     const existingReceipt = await this.lookupReceipt(scopeId, input.idempotencyKey, requestHash);
     if (existingReceipt) return replayOrConflict(existingReceipt);
 
     const sessions = new D1ExpeditionSessions(this.database);
-    await sessions.abandonExpired(now, accountId, input.floorSessionId);
-    const current = await this.session(accountId, input.floorSessionId);
+    await sessions.abandonExpired(now, accountId, floorSessionId);
+    const current = await this.session(accountId, floorSessionId);
     if (!current) return mutationResult({ code: "NOT_FOUND" });
     const nowIso = now.toISOString();
     const availability = sessionAvailability(current, nowIso);
     if (availability !== "open") return mutationResult({ code: availability });
 
-    const stored = await new D1FloorStore(this.database).loadSnapshot(input.floorSessionId);
+    const stored = await new D1FloorStore(this.database).loadSnapshot(floorSessionId);
     if (!stored) return mutationResult({ code: "NOT_FOUND" });
 
     const runRow = await this.loadRunById(current.run_id, accountId);
@@ -404,7 +546,7 @@ export class D1McpGameplay implements McpGameplay {
     const response = {
       accepted: true,
       replayed: false,
-      floorSessionId: input.floorSessionId,
+      floorSessionId,
       status: "abandoned",
       floor: current.floor,
       mode: runRow.mode,
@@ -432,10 +574,10 @@ export class D1McpGameplay implements McpGameplay {
           requestHash,
           canonicalStringify(response),
           nowIso,
-          input.floorSessionId,
+          floorSessionId,
           accountId,
           nowIso,
-          input.floorSessionId,
+          floorSessionId,
           stored.version,
           runRow.id,
           runRow.state_json,
@@ -449,7 +591,7 @@ export class D1McpGameplay implements McpGameplay {
         )
         .bind(
           nowIso,
-          input.floorSessionId,
+          floorSessionId,
           accountId,
           nowIso,
           runRow.id,
@@ -469,7 +611,7 @@ export class D1McpGameplay implements McpGameplay {
           nowIso,
           runRow.id,
           runRow.state_json,
-          input.floorSessionId,
+          floorSessionId,
           stored.version,
           scopeId,
           input.idempotencyKey,
@@ -484,7 +626,7 @@ export class D1McpGameplay implements McpGameplay {
   }
 
   async endFloor(input: {
-    floorSessionId: string;
+    floorSessionId?: string;
     idempotencyKey: string;
   }): Promise<Record<string, unknown>> {
     const accountId = await this.accountId();
@@ -492,23 +634,25 @@ export class D1McpGameplay implements McpGameplay {
     if (!(await this.allowRateScope("active-floor-mutation", accountId, now)))
       return mutationResult({ code: "RATE_LIMITED" });
 
-    const session = await this.session(accountId, input.floorSessionId);
+    const floorSessionId = input.floorSessionId ?? (await this.activeSessionId(accountId));
+    if (!floorSessionId) return mutationResult({ code: "NOT_FOUND" });
+    const session = await this.session(accountId, floorSessionId);
     if (!session) return mutationResult({ code: "NOT_FOUND" });
 
-    const scopeId = `end:${accountId}:${input.floorSessionId}`;
-    const requestHash = canonicalStringify({ op: "end", floorSessionId: input.floorSessionId });
+    const scopeId = `end:${accountId}:${floorSessionId}`;
+    const requestHash = canonicalStringify({ op: "end", floorSessionId });
     const existingReceipt = await this.lookupReceipt(scopeId, input.idempotencyKey, requestHash);
     if (existingReceipt) return replayOrConflict(existingReceipt);
 
     const sessions = new D1ExpeditionSessions(this.database);
-    await sessions.abandonExpired(now, accountId, input.floorSessionId);
-    const current = await this.session(accountId, input.floorSessionId);
+    await sessions.abandonExpired(now, accountId, floorSessionId);
+    const current = await this.session(accountId, floorSessionId);
     if (!current) return mutationResult({ code: "NOT_FOUND" });
     const nowIso = now.toISOString();
     const availability = sessionAvailability(current, nowIso);
     if (availability !== "open") return mutationResult({ code: availability });
 
-    const stored = await new D1FloorStore(this.database).loadSnapshot(input.floorSessionId);
+    const stored = await new D1FloorStore(this.database).loadSnapshot(floorSessionId);
     if (!stored) return mutationResult({ code: "NOT_FOUND" });
     if (stored.snapshot.character.dead) return mutationResult({ code: "SESSION_UNAVAILABLE" });
     if (!stored.snapshot.exitUnlocked) return mutationResult({ code: "EXIT_LOCKED" });
@@ -542,7 +686,7 @@ export class D1McpGameplay implements McpGameplay {
     const response = {
       accepted: true,
       replayed: false,
-      floorSessionId: input.floorSessionId,
+      floorSessionId,
       status: "completed",
       floor: floorNumber,
       kind: floorKind,
@@ -576,10 +720,10 @@ export class D1McpGameplay implements McpGameplay {
           requestHash,
           canonicalStringify(response),
           nowIso,
-          input.floorSessionId,
+          floorSessionId,
           accountId,
           nowIso,
-          input.floorSessionId,
+          floorSessionId,
           stored.version,
           runRow.id,
           runRow.state_json,
@@ -720,7 +864,7 @@ export class D1McpGameplay implements McpGameplay {
         )
         .bind(
           nowIso,
-          input.floorSessionId,
+          floorSessionId,
           accountId,
           nowIso,
           runRow.id,
@@ -740,7 +884,7 @@ export class D1McpGameplay implements McpGameplay {
           nowIso,
           runRow.id,
           runRow.state_json,
-          input.floorSessionId,
+          floorSessionId,
           stored.version,
           scopeId,
           input.idempotencyKey,
@@ -1212,6 +1356,18 @@ export class D1McpGameplay implements McpGameplay {
     return statements;
   }
 
+  private async activeSessionId(accountId: string): Promise<string | null> {
+    const row = await this.database
+      .prepare(
+        `SELECT id FROM floor_sessions
+         WHERE account_id = ? AND status IN ('active', 'paused')
+         ORDER BY updated_at DESC LIMIT 1`,
+      )
+      .bind(accountId)
+      .first<{ id: string }>();
+    return row?.id ?? null;
+  }
+
   private insertJournalForEndStatement(input: {
     accountId: string;
     seasonId: string;
@@ -1521,4 +1677,13 @@ function isTerrain(
   value: unknown,
 ): value is "floor" | "wall" | "entrance" | "objective" | "exit" | "secret" {
   return ["floor", "wall", "entrance", "objective", "exit", "secret"].includes(value as string);
+}
+
+function compactObservation(
+  observation: ReturnType<typeof observe>,
+  includeTiles = false,
+): Record<string, unknown> {
+  if (includeTiles) return observation as unknown as Record<string, unknown>;
+  const { tiles: _tiles, ...compact } = observation;
+  return compact as unknown as Record<string, unknown>;
 }

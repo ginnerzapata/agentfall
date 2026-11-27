@@ -127,9 +127,9 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 - [x] Define versioned TypeScript schemas for room, encounter, enemy, item, trait, and boss content.
 - [x] Author reusable room templates tagged by difficulty and required capabilities.
-- [x] Deterministically assemble connected floors of six to ten rooms.
+- [x] Deterministically assemble compact branching floors of four to six rooms with door-gated side branches.
 - [x] Place the entrance, locked exit, mandatory objective, encounters, rewards, healing, trap, and optional secret area.
-- [x] Calculate a deterministic floor turn budget from floor content.
+- [x] Calculate a deterministic floor turn budget (25–45 turns) from floor content.
 - [x] Validate connectivity and objective reachability.
 - [x] Validate that each class can complete every mandatory path.
 - [x] Validate that the turn budget is feasible without guaranteeing exhaustive exploration.
@@ -139,7 +139,7 @@ The commands must pass from a clean checkout without undocumented manual setup.
 
 - [x] Property tests validate many seeds without impossible floors or illegal state.
 - [x] Given the same seed and content version, generation is byte-identical.
-- [x] A generated floor targets approximately 60–100 meaningful character decisions.
+- [x] A generated floor targets a compact 25–45 turn budget with real enemy combat turns, telegraphed intents, and batched MCP actions.
 
 ## 7. Orc Siege Content Pack
 

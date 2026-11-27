@@ -14,7 +14,7 @@ import {
   type RunDefinition,
 } from "@agentfall/contracts";
 
-export const FLOOR_GENERATOR_VERSION = "floor-generator-1";
+export const FLOOR_GENERATOR_VERSION = "floor-generator-2";
 
 export type GeneratedRoom = {
   id: string;
@@ -80,6 +80,7 @@ export const DEFAULT_FLOOR_CONTENT: FloorContentPack = {
       schemaVersion: FLOOR_CONTENT_SCHEMA_VERSION,
       id: "tower-charm",
       kind: "accessory",
+      focusBonus: 1,
       rarity: "uncommon",
     },
   ],
@@ -88,9 +89,9 @@ export const DEFAULT_FLOOR_CONTENT: FloorContentPack = {
 };
 
 /**
- * Builds a six-to-ten-room floor from stable template identifiers.  The linear
- * mandatory spine is deliberate: it makes universal completion provable while
- * side rooms retain optional exploration choices.
+ * Builds a compact four-to-six-room branching floor from stable template identifiers.
+ * A short 3-4 room main spine guarantees fast traversal and provable completion while
+ * 1-2 door-gated side branches create optional risk/reward exploration choices.
  */
 export function generateFloor(
   seed: string,
@@ -98,81 +99,131 @@ export function generateFloor(
   character: CharacterDefinition = defaultCharacter(),
 ): GeneratedFloor {
   const random = rng(`${content.version}:${seed}`);
-  const roomCount = 6 + Math.floor(random() * 5);
-  const width = roomCount * 6 + 1;
-  const height = 11;
+  const roomCount = 4 + Math.floor(random() * 3); // 4..6 rooms
+  const spineCount = roomCount >= 5 ? 4 : 3;
+  const branchCount = roomCount - spineCount; // 1..2 side rooms
+  const width = spineCount * 5 + 1;
+  const height = branchCount >= 2 ? 16 : 11;
+  const spineY = 6;
   const templates = usableRooms(content.rooms);
-  const rooms: GeneratedRoom[] = Array.from({ length: roomCount }, (_, index) => {
+
+  const spineRooms: GeneratedRoom[] = Array.from({ length: spineCount }, (_, index) => {
     const template = templates[Math.floor(random() * templates.length)] as RoomContent;
     const purpose: GeneratedRoom["purpose"] =
       index === 0
         ? "entrance"
-        : index === roomCount - 2
+        : index === spineCount - 2
           ? "objective"
-          : index === roomCount - 1
+          : index === spineCount - 1
             ? "exit"
             : "encounter";
     return {
       id: `room-${index + 1}`,
       templateId: template.id,
       difficulty: template.difficulty,
-      bounds: { x: 1 + index * 6, y: 3, width: 4, height: 5 },
+      bounds: { x: 1 + index * 5, y: spineY, width: 4, height: 4 },
       purpose,
     };
   });
-  // Dedicated optional rewards and recovery are substitutions, never obstacles on the spine.
-  atRequired(rooms, 1, "recovery room").purpose = "healing";
-  atRequired(rooms, 2, "reward room").purpose = "reward";
-  if (roomCount > 7) atRequired(rooms, 3, "secret room").purpose = "secret";
 
+  const branchRooms: GeneratedRoom[] = [];
+  const northAnchor = atRequired(spineRooms, 1, "north branch anchor");
+  branchRooms.push({
+    id: `room-${spineCount + 1}`,
+    templateId: (templates[Math.floor(random() * templates.length)] as RoomContent).id,
+    difficulty: 2,
+    bounds: { x: northAnchor.bounds.x, y: 1, width: 4, height: 4 },
+    purpose: "reward",
+  });
+  if (branchCount >= 2) {
+    const southAnchor = atRequired(spineRooms, Math.min(2, spineCount - 2), "south branch anchor");
+    branchRooms.push({
+      id: `room-${spineCount + 2}`,
+      templateId: (templates[Math.floor(random() * templates.length)] as RoomContent).id,
+      difficulty: 2,
+      bounds: { x: southAnchor.bounds.x, y: 11, width: 4, height: 4 },
+      purpose: roomCount === 6 ? "secret" : "healing",
+    });
+  }
+
+  const rooms = [...spineRooms, ...branchRooms];
   const tiles = grid(width, height);
   for (const room of rooms) carveRoom(tiles, room.bounds);
-  for (let index = 0; index < rooms.length - 1; index += 1) {
-    const left = atRequired(rooms, index, "left room").bounds;
-    const right = atRequired(rooms, index + 1, "right room").bounds;
-    carveLine(tiles, { x: left.x + left.width - 1, y: 5 }, { x: right.x, y: 5 });
+
+  // Connect spine rooms horizontally at y = spineY + 1 (1-tile doorway).
+  for (let index = 0; index < spineRooms.length - 1; index += 1) {
+    const left = atRequired(spineRooms, index, "left room").bounds;
+    const right = atRequired(spineRooms, index + 1, "right room").bounds;
+    carveLine(tiles, { x: left.x + left.width - 1, y: spineY + 1 }, { x: right.x, y: spineY + 1 });
+    if (index === spineRooms.length - 2) {
+      // Closed tactical door before the exit room.
+      tile(tiles, { x: left.x + left.width, y: spineY + 1 }).door = "closed";
+    }
   }
-  const entrance = center(atRequired(rooms, 0, "entrance room"));
-  const objective = center(atRequired(rooms, roomCount - 2, "objective room"));
-  const exit = center(atRequired(rooms, roomCount - 1, "exit room"));
+
+  // Connect north branch room with a closed door at y = spineY - 1.
+  const northDoorPos = { x: northAnchor.bounds.x + 1, y: spineY - 1 };
+  tile(tiles, northDoorPos).terrain = "floor";
+  tile(tiles, northDoorPos).door = "closed";
+
+  // Connect south branch room (if present) with a closed door at y = spineY + 4.
+  if (branchCount >= 2) {
+    const southAnchor = atRequired(spineRooms, Math.min(2, spineCount - 2), "south branch anchor");
+    const southDoorPos = { x: southAnchor.bounds.x + 1, y: spineY + 4 };
+    tile(tiles, southDoorPos).terrain = "floor";
+    tile(tiles, southDoorPos).door = "closed";
+  }
+
+  const entrance = center(atRequired(spineRooms, 0, "entrance room"));
+  const objective = center(atRequired(spineRooms, spineCount - 2, "objective room"));
+  const exit = center(atRequired(spineRooms, spineCount - 1, "exit room"));
   tile(tiles, entrance).terrain = "entrance";
   tile(tiles, objective).terrain = "objective";
   tile(tiles, exit).terrain = "exit";
 
-  // Rewards and recovery can be guarded; the mandatory objective and exit never are.
-  const encounterRooms = rooms
-    .slice(1, -2)
-    .filter((room) => room.purpose !== "secret")
-    .slice(0, 3);
-  const encounters = encounterRooms.map((room, index) => ({
+  // Place 2-3 tactical encounters across the spine and reward branch.
+  const encounterCandidates = [
+    ...(spineCount >= 4 ? [atRequired(spineRooms, 1, "spine encounter")] : []),
+    atRequired(spineRooms, spineCount - 2, "objective room"),
+    atRequired(branchRooms, 0, "reward branch"),
+  ].slice(0, 3);
+
+  const encounterTemplates = content.encounters.length
+    ? content.encounters
+    : DEFAULT_FLOOR_CONTENT.encounters;
+  const encounters = encounterCandidates.map((room, index) => ({
     roomId: room.id,
     encounterId: atRequired(
-      content.encounters.length ? content.encounters : DEFAULT_FLOOR_CONTENT.encounters,
-      index % (content.encounters.length || DEFAULT_FLOOR_CONTENT.encounters.length),
+      encounterTemplates,
+      (index + Math.floor(random() * encounterTemplates.length)) % encounterTemplates.length,
       "encounter template",
     ).id,
   }));
   const enemies = encounters.flatMap(({ roomId, encounterId }) =>
     instantiateEncounter(roomId, encounterId, rooms, content),
   );
+
+  const rewardRoom = atRequired(branchRooms, 0, "reward room");
+  const sanctuaryRoom = branchRooms[1] ?? atRequired(spineRooms, 0, "entrance sanctuary");
+  const trapRoom = atRequired(spineRooms, 1, "trap room");
   const objects: FloorObjectDefinition[] = [
     {
       id: "sanctuary",
       type: "sanctuary",
-      position: center(atRequired(rooms, 1, "recovery room")),
-      healing: 3,
+      position: { x: sanctuaryRoom.bounds.x + 3, y: sanctuaryRoom.bounds.y + 3 },
+      healing: 4,
     },
     {
       id: "reward",
       type: "chest",
-      position: center(atRequired(rooms, 2, "reward room")),
-      itemId: itemId(content.items),
+      position: { x: rewardRoom.bounds.x + 1, y: rewardRoom.bounds.y + 1 },
+      itemId: itemId(content.items, Math.floor(random() * Math.max(1, content.items.length))),
     },
     {
       id: "trap",
       type: "trap",
-      position: { x: atRequired(rooms, 3, "trap room").bounds.x, y: 5 },
-      damage: 1,
+      position: { x: trapRoom.bounds.x, y: spineY + 2 },
+      damage: 2,
     },
   ];
   const secret = rooms.find((room) => room.purpose === "secret");
@@ -180,9 +231,10 @@ export function generateFloor(
     objects.push({
       id: "secret-reward",
       type: "item",
-      position: { x: secret.bounds.x + 2, y: 4 },
-      itemId: itemId(content.items),
+      position: { x: secret.bounds.x + 1, y: secret.bounds.y + 1 },
+      itemId: itemId(content.items, 1),
     });
+
   const definition: RunDefinition = {
     seed,
     runId: `generated:${seed}`,
@@ -206,14 +258,14 @@ export function generateFloor(
 }
 
 export function calculateTurnBudget(roomCount: number, encounterCount: number): number {
-  // Bounded to the PRD target; optional rooms cost budget but are not required.
-  return Math.max(60, Math.min(100, 42 + roomCount * 5 + encounterCount * 6));
+  // Compact, urgent floor budget (25-45 turns) matching 4-6 branching rooms.
+  return Math.max(25, Math.min(45, 16 + roomCount * 3 + encounterCount * 4));
 }
 
 export function validateGeneratedFloor(floor: GeneratedFloor): GenerationValidation {
   const reasons: string[] = [];
-  if (floor.rooms.length < 6 || floor.rooms.length > 10) reasons.push("room-count");
-  if (floor.turnBudget < 60 || floor.turnBudget > 100) reasons.push("turn-budget");
+  if (floor.rooms.length < 4 || floor.rooms.length > 6) reasons.push("room-count");
+  if (floor.turnBudget < 25 || floor.turnBudget > 45) reasons.push("turn-budget");
   const { definition } = floor;
   if (definition.tiles.length !== definition.board.width * definition.board.height)
     reasons.push("incomplete-grid");
@@ -287,8 +339,9 @@ function defaultCharacter(): CharacterDefinition {
 function usableRooms(rooms: RoomContent[]): RoomContent[] {
   return rooms.length ? rooms : DEFAULT_FLOOR_CONTENT.rooms;
 }
-function itemId(items: ItemContent[]): string {
-  return atRequired(items.length ? items : DEFAULT_FLOOR_CONTENT.items, 0, "item template").id;
+function itemId(items: ItemContent[], index = 0): string {
+  const pool = items.length ? items : DEFAULT_FLOOR_CONTENT.items;
+  return atRequired(pool, index % pool.length, "item template").id;
 }
 function grid(width: number, height: number): FloorTile[] {
   return Array.from({ length: width * height }, (_, index) => ({
@@ -312,7 +365,7 @@ function carveLine(tiles: FloorTile[], from: Position, to: Position): void {
   for (let x = from.x; x <= to.x; x += 1) tile(tiles, { x, y: from.y }).terrain = "floor";
 }
 function center(room: GeneratedRoom): Position {
-  return { x: room.bounds.x + 1, y: room.bounds.y + 2 };
+  return { x: room.bounds.x + 1, y: room.bounds.y + 1 };
 }
 function instantiateEncounter(
   roomId: string,
@@ -333,8 +386,13 @@ function instantiateEncounter(
       atRequired(DEFAULT_FLOOR_CONTENT.enemies, 0, "default enemy");
     return {
       id: `${roomId}-${index + 1}-${enemy.id}`,
-      position: { x: room.bounds.x + 2 + (index % 2), y: room.bounds.y + 1 },
+      position: {
+        x: room.bounds.x + 2 + (index % 2),
+        y: room.bounds.y + 2 + Math.floor(index / 2),
+      },
       behavior: enemy.behavior,
+      role: enemy.role,
+      ...(enemy.range !== undefined ? { range: enemy.range } : {}),
       ...enemy.stats,
     };
   });

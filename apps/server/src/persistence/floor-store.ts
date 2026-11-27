@@ -34,19 +34,36 @@ export type CommitActionInput = {
   floorSessionId: string;
   idempotencyKey: string;
   expectedSnapshotVersion: number;
-  action: Action;
+  action?: Action;
+  actions?: Action[];
+  autoEndTurn?: boolean;
   now: string;
   turnBudget?: number;
   extraStatements?: (committed: {
     version: number;
     snapshot: Snapshot;
     event: EngineEvent;
+    events: EngineEvent[];
   }) => D1PreparedStatement[];
 };
 
 export type CommitActionResult =
-  | { accepted: true; replayed: false; version: number; snapshot: Snapshot; event: EngineEvent }
-  | { accepted: true; replayed: true; version: number; snapshot: Snapshot; event: EngineEvent }
+  | {
+      accepted: true;
+      replayed: false;
+      version: number;
+      snapshot: Snapshot;
+      event: EngineEvent;
+      events?: EngineEvent[];
+    }
+  | {
+      accepted: true;
+      replayed: true;
+      version: number;
+      snapshot: Snapshot;
+      event: EngineEvent;
+      events?: EngineEvent[];
+    }
   | {
       accepted: false;
       reason:
@@ -93,9 +110,12 @@ export class D1FloorStore implements FloorStore {
   }
 
   async commitAction(input: CommitActionInput): Promise<CommitActionResult> {
+    const requestedActions = input.actions ?? (input.action ? [input.action] : []);
+    if (requestedActions.length === 0) return { accepted: false, reason: "invalid-action" };
     const requestHash = canonicalStringify({
       expectedSnapshotVersion: input.expectedSnapshotVersion,
-      action: input.action,
+      ...(input.actions ? { actions: input.actions } : { action: input.action }),
+      ...(input.autoEndTurn ? { autoEndTurn: true } : {}),
     });
     const receipt = await this.receipt(input.floorSessionId, input.idempotencyKey);
     if (receipt) return replayReceipt(receipt, requestHash);
@@ -107,44 +127,82 @@ export class D1FloorStore implements FloorStore {
     if (input.turnBudget !== undefined && stored.snapshot.turn > input.turnBudget)
       return { accepted: false, reason: "floor-collapsed" };
 
-    const transition = act(stored.snapshot, input.action);
-    if (!transition.accepted) return { accepted: false, reason: "invalid-action" };
+    let currentSnapshot = stored.snapshot;
+    const producedEvents: EngineEvent[] = [];
+    const producedChecksums: string[] = [];
+
+    for (const action of requestedActions) {
+      if (currentSnapshot.character.dead) break;
+      if (input.turnBudget !== undefined && currentSnapshot.turn > input.turnBudget) break;
+      const transition = act(currentSnapshot, action);
+      if (!transition.accepted) {
+        if (producedEvents.length === 0) return { accepted: false, reason: "invalid-action" };
+        break;
+      }
+      currentSnapshot = transition.snapshot;
+      producedEvents.push(transition.event);
+      producedChecksums.push(transition.snapshot.checksum);
+
+      if (
+        input.autoEndTurn &&
+        action.type !== "end-turn" &&
+        !currentSnapshot.character.dead &&
+        currentSnapshot.actionPoints === 0 &&
+        (input.turnBudget === undefined || currentSnapshot.turn <= input.turnBudget)
+      ) {
+        const ended = act(currentSnapshot, { type: "end-turn" });
+        if (ended.accepted) {
+          currentSnapshot = ended.snapshot;
+          producedEvents.push(ended.event);
+          producedChecksums.push(ended.snapshot.checksum);
+        }
+      }
+    }
+
+    const lastEvent = producedEvents.at(-1);
+    if (!lastEvent) return { accepted: false, reason: "invalid-action" };
 
     const nextVersion = stored.version + 1;
     const committed: CommitActionResult = {
       accepted: true,
       replayed: false,
       version: nextVersion,
-      snapshot: transition.snapshot,
-      event: transition.event,
+      snapshot: currentSnapshot,
+      event: lastEvent,
+      events: producedEvents,
     };
     const responseJson = canonicalStringify(committed);
-    const sequence = stored.snapshot.events.length;
+    const baseSequence = stored.snapshot.events.length;
     const extra =
       input.extraStatements?.({
         version: nextVersion,
-        snapshot: transition.snapshot,
-        event: transition.event,
+        snapshot: currentSnapshot,
+        event: lastEvent,
+        events: producedEvents,
       }) ?? [];
 
-    // D1 batch is transactional. Each statement is additionally conditional,
-    // which turns a stale version into no-ops instead of a partial write.
-    const batch = await this.database.batch([
+    const eventInserts = producedEvents.map((event, index) =>
       this.database
         .prepare(
           `INSERT INTO events (id, floor_session_id, sequence, event_json, checksum, created_at)
          SELECT ?, ?, ?, ?, ?, ? FROM snapshots WHERE floor_session_id = ? AND version = ?`,
         )
         .bind(
-          `${input.floorSessionId}:${sequence + 1}`,
+          `${input.floorSessionId}:${baseSequence + index + 1}`,
           input.floorSessionId,
-          sequence + 1,
-          canonicalStringify(transition.event),
-          transition.snapshot.checksum,
+          baseSequence + index + 1,
+          canonicalStringify(event),
+          producedChecksums[index] as string,
           input.now,
           input.floorSessionId,
           input.expectedSnapshotVersion,
         ),
+    );
+
+    // D1 batch is transactional. Each statement is additionally conditional,
+    // which turns a stale version into no-ops instead of a partial write.
+    const batch = await this.database.batch([
+      ...eventInserts,
       this.database
         .prepare(
           `UPDATE snapshots SET version = ?, checksum = ?, snapshot_json = ?, updated_at = ?
@@ -152,8 +210,8 @@ export class D1FloorStore implements FloorStore {
         )
         .bind(
           nextVersion,
-          transition.snapshot.checksum,
-          canonicalStringify(transition.snapshot),
+          currentSnapshot.checksum,
+          canonicalStringify(currentSnapshot),
           input.now,
           input.floorSessionId,
           input.expectedSnapshotVersion,
@@ -175,7 +233,8 @@ export class D1FloorStore implements FloorStore {
       ...extra,
     ]);
 
-    if (batch[2]?.meta?.changes === 1) return committed;
+    const receiptIndex = eventInserts.length + 1;
+    if (batch[receiptIndex]?.meta?.changes === 1) return committed;
 
     const persisted = await this.receipt(input.floorSessionId, input.idempotencyKey);
     if (persisted) return replayReceipt(persisted, requestHash);

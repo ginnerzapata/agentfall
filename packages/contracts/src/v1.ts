@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 // These versions describe serialized values, not the contracts package version.
-export const SNAPSHOT_SCHEMA_VERSION = 10;
-export const ENGINE_EVENT_SCHEMA_VERSION = 10;
+export const SNAPSHOT_SCHEMA_VERSION = 11;
+export const ENGINE_EVENT_SCHEMA_VERSION = 11;
 export const ACTION_POINT_LIMIT = 4;
 export const MAX_TEMPORARY_DEFENSE_FROM_UNUSED_ACTION_POINTS = 2;
 export const D20_SIDES = 20;
@@ -15,6 +15,8 @@ export const ACTION_POINT_COST = {
   openDoor: 1,
   closeDoor: 1,
   dropItem: 1,
+  useItem: 1,
+  equipItem: 1,
 } as const;
 export const ABILITY_ACTION_POINT_COST = {
   guard: 2,
@@ -37,16 +39,37 @@ export const MCP_MUTATION_SCHEMA_VERSION = 1;
 const mcpId = z.string().min(1).max(128);
 const mcpPosition = z.object({ x: z.number().int(), y: z.number().int() });
 
+const mcpDirection = z.enum(["north", "east", "south", "west"]);
+
 export const McpActionSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("move"), direction: z.enum(["north", "east", "south", "west"]) }),
-  z.object({ type: z.literal("scout"), direction: z.enum(["north", "east", "south", "west"]) }),
+  z.object({ type: z.literal("move"), direction: mcpDirection }),
+  z.object({
+    type: z.literal("travel"),
+    direction: mcpDirection,
+    maxSteps: z.number().int().min(1).max(ACTION_POINT_LIMIT).optional(),
+  }),
+  z.object({ type: z.literal("scout"), direction: mcpDirection }),
   z.object({ type: z.literal("attack"), targetId: z.string().min(1) }),
   z.object({ type: z.literal("shove"), targetId: z.string().min(1) }),
   z.object({ type: z.literal("disengaging-shot"), targetId: z.string().min(1) }),
   z.object({ type: z.literal("arc-bolt"), targetId: z.string().min(1) }),
-  z.object({ type: z.literal("interact"), target: mcpPosition }),
-  z.object({ type: z.literal("open-door"), target: mcpPosition }),
-  z.object({ type: z.literal("close-door"), target: mcpPosition }),
+  z.object({
+    type: z.literal("interact"),
+    target: mcpPosition.optional(),
+    direction: mcpDirection.optional(),
+  }),
+  z.object({
+    type: z.literal("open-door"),
+    target: mcpPosition.optional(),
+    direction: mcpDirection.optional(),
+  }),
+  z.object({
+    type: z.literal("close-door"),
+    target: mcpPosition.optional(),
+    direction: mcpDirection.optional(),
+  }),
+  z.object({ type: z.literal("use-item"), slot: z.number().int().min(0) }),
+  z.object({ type: z.literal("equip-item"), slot: z.number().int().min(0) }),
   z.object({ type: z.literal("drop-item"), slot: z.number().int().min(0) }),
   z.object({ type: z.literal("guard") }),
   z.object({ type: z.literal("ward") }),
@@ -58,24 +81,39 @@ export const McpFloorStartInputSchema = z.object({
   mode: z.enum(["ranked", "practice"]),
   idempotencyKey: mcpId,
   strategy: z.string().max(1_000).optional(),
+  includeTiles: z.boolean().default(false),
 });
-export const McpObservationInputSchema = z.object({ floorSessionId: mcpId });
-export const McpFloorActionInputSchema = z.object({
-  floorSessionId: mcpId,
-  snapshotVersion: z.number().int().min(0),
-  idempotencyKey: mcpId,
-  action: McpActionSchema,
+export const McpObservationInputSchema = z.object({
+  floorSessionId: mcpId.optional(),
+  includeTiles: z.boolean().default(false),
 });
+export const McpFloorActionInputSchema = z
+  .object({
+    floorSessionId: mcpId.optional(),
+    snapshotVersion: z.number().int().min(0).optional(),
+    idempotencyKey: mcpId,
+    action: McpActionSchema.optional(),
+    actions: z.array(McpActionSchema).min(1).max(12).optional(),
+    autoEndTurn: z.boolean().default(false),
+    includeTiles: z.boolean().default(false),
+  })
+  .refine((value) => Boolean(value.action) !== Boolean(value.actions), {
+    message: "Provide either action or actions.",
+  });
 export const McpCharacterInputSchema = z.object({});
+export const McpCharacterUpgradeInputSchema = z.object({
+  upgradeId: mcpId,
+  idempotencyKey: mcpId,
+});
 export const McpJournalInputSchema = z.object({
   limit: z.number().int().min(1).max(100).default(25),
 });
 export const McpFloorAbandonInputSchema = z.object({
-  floorSessionId: mcpId,
+  floorSessionId: mcpId.optional(),
   idempotencyKey: mcpId,
 });
 export const McpFloorEndInputSchema = z.object({
-  floorSessionId: mcpId,
+  floorSessionId: mcpId.optional(),
   idempotencyKey: mcpId,
 });
 export const McpSeasonInputSchema = z.object({ seasonId: mcpId.optional() });
@@ -170,6 +208,11 @@ export type ItemDefinition = {
   id: string;
   kind: ItemKind;
   healing?: number;
+  temporaryDefense?: number;
+  powerBonus?: number;
+  defenseBonus?: number;
+  focusBonus?: number;
+  accuracyBonus?: number;
 };
 
 export type InventoryContext = "between-floors" | "in-floor";
@@ -245,6 +288,16 @@ export type EnemyState = CombatantStats & {
   id: string;
   position: Position;
   behavior?: EnemyBehavior;
+  role?: "scout" | "brute" | "archer" | "shaman" | "boss";
+  range?: number;
+};
+
+export type EnemyIntent = {
+  enemyId: string;
+  kind: "melee" | "ranged" | "heal" | "move" | "retreat" | "wait";
+  summary: string;
+  damage?: number;
+  targetId?: string;
 };
 
 export type FloorObjectDefinition =
@@ -326,18 +379,36 @@ export type FloorContentPack = {
 
 export type Action =
   | { type: "move"; direction: Direction }
+  | { type: "travel"; direction: Direction; maxSteps?: number }
   | { type: "attack"; targetId: string }
-  | { type: "interact"; target: Position }
-  | { type: "open-door"; target: Position }
-  | { type: "close-door"; target: Position }
+  | { type: "interact"; target?: Position; direction?: Direction }
+  | { type: "open-door"; target?: Position; direction?: Direction }
+  | { type: "close-door"; target?: Position; direction?: Direction }
   | { type: "guard" }
   | { type: "shove"; targetId: string }
   | { type: "scout"; direction: Direction }
   | { type: "disengaging-shot"; targetId: string }
   | { type: "arc-bolt"; targetId: string }
   | { type: "ward" }
+  | { type: "use-item"; slot: number }
+  | { type: "equip-item"; slot: number }
   | { type: "drop-item"; slot: number }
   | { type: "end-turn" };
+
+export type EnemyAttackOutcome = {
+  enemyId: string;
+  kind: "melee" | "ranged";
+  roll: number;
+  damage: number;
+  blocked: number;
+  outcome: CharacterDamageOutcome;
+};
+
+export type EnemyHealOutcome = {
+  enemyId: string;
+  targetId: string;
+  amount: number;
+};
 
 export type EngineEvent = {
   schemaVersion: typeof ENGINE_EVENT_SCHEMA_VERSION;
@@ -348,6 +419,15 @@ export type EngineEvent = {
       from: Position;
       to: Position;
       cost: 1;
+      triggeredTrap?: { id: string; damage: number; outcome: CharacterDamageOutcome };
+    }
+  | {
+      type: "travel";
+      direction: Direction;
+      from: Position;
+      path: Position[];
+      cost: number;
+      stopReason: "max-steps" | "blocked" | "combat" | "poi" | "trap";
       triggeredTrap?: { id: string; damage: number; outcome: CharacterDamageOutcome };
     }
   | { type: "attack"; targetId: string; roll: number; damage: number; cost: 2 }
@@ -376,11 +456,29 @@ export type EngineEvent = {
     }
   | { type: "arc-bolt"; targetId: string; damage: number; cost: 2 }
   | { type: "ward"; protection: number; expiresTurn: number; cost: 2 }
+  | {
+      type: "use-item";
+      slot: number;
+      itemId: string;
+      healing?: number;
+      temporaryDefense?: number;
+      cost: 1;
+    }
+  | {
+      type: "equip-item";
+      slot: number;
+      itemId: string;
+      equipmentSlot: keyof EquipmentSlots;
+      previousItemId: string | null;
+      cost: 1;
+    }
   | { type: "drop-item"; slot: number; itemId: string; quantity: number; cost: 1 }
   | {
       type: "end-turn";
       temporaryDefense: number;
       enemyMoves: Array<{ enemyId: string; from: Position; to: Position }>;
+      enemyAttacks?: EnemyAttackOutcome[];
+      enemyHeals?: EnemyHealOutcome[];
     }
 );
 
@@ -414,6 +512,7 @@ export type Snapshot = {
 
 export type LegalAction =
   | { type: "move"; directions: Direction[] }
+  | { type: "travel"; directions: Direction[] }
   | { type: "attack"; targetIds: string[] }
   | { type: "interact"; targets: Position[] }
   | { type: "open-door"; targets: Position[] }
@@ -424,6 +523,8 @@ export type LegalAction =
   | { type: "disengaging-shot"; targetIds: string[] }
   | { type: "arc-bolt"; targetIds: string[] }
   | { type: "ward" }
+  | { type: "use-item"; slots: number[] }
+  | { type: "equip-item"; slots: number[] }
   | { type: "drop-item"; slots: number[] }
   | { type: "end-turn" };
 
@@ -435,11 +536,13 @@ export type Observation = {
   actionPoints: number;
   character: CharacterState;
   enemies: EnemyState[];
+  enemyIntents: EnemyIntent[];
   objects: ObservedFloorObject[];
   tiles: ObservedTile[];
   ascii: string;
   inCombat: boolean;
   attackPreviews: AttackPreview[];
+  recentEvents: string[];
   legalActions: LegalAction[];
 };
 
@@ -457,7 +560,8 @@ export type ActionRejectionReason =
   | "invalid-interaction"
   | "invalid-ability"
   | "character-dead"
-  | "backpack-full";
+  | "backpack-full"
+  | "in-combat";
 
 export type RunDefinitionRejectionReason =
   | "invalid-board-dimensions"

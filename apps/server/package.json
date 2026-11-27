@@ -5,6 +5,7 @@
   "exports": "./src/lib.ts",
   "scripts": {
     "dev": "wrangler dev",
+    "dev:local": "wrangler d1 migrations apply agentfall --local && wrangler dev",
     "admin:season": "bun scripts/admin.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "bun scripts/migrate-local.ts",
